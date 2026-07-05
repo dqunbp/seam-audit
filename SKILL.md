@@ -1,6 +1,6 @@
 ---
 name: seam-audit
-description: Use BEFORE writing the code for any non-trivial feature, refactor, or change that touches more than one module — especially features over ~800 lines or anything touching money/billing/credits, background job lifecycle, shared builders/helpers, external dependencies (SDKs, APIs, LLM clients), migrations, or user-facing strings. The skill front-loads the contract/seam checking that normally only happens during code review, so the bugs that usually surface in review (broken contracts at the seams between new code and existing systems or external dependencies) are caught at design time instead. Triggers include "new feature", "design a feature", "implement feature", "before writing code", "large PR", "seam audit", "check the seams", "feature-dev". Run it FIRST, before the first line of implementation. Output is a seam-audit table (seam → assumption → evidence) plus the unhappy-path list, then implementation proceeds.
+description: Use BEFORE writing the code for any non-trivial feature, refactor, or change that touches more than one module — especially anything touching money/billing/quotas, background job lifecycle, shared builders/helpers, external dependencies (SDKs, APIs, external services), schema migrations, or user-facing strings. The skill front-loads the contract/seam checking that normally only happens during code review, so the bugs that usually surface in review (broken contracts at the seams between new code and existing systems or external dependencies) are caught at design time instead. Triggers include "new feature", "design a feature", "implement feature", "before writing code", "large PR", "seam audit", "check the seams", "feature-dev". Run it FIRST, before the first line of implementation. Output is a seam-audit table (seam → assumption → evidence) plus the unhappy-path list, then implementation proceeds.
 ---
 
 # Seam Audit — review the design before writing the code
@@ -17,11 +17,11 @@ This is not a new observation. Margaret Hamilton's error analysis of the Apollo 
 
 ## When to apply
 
-Run it BEFORE the first line of implementation when the task is:
-- larger than ~800 lines, **or**
-- touching money/billing/credits, quota counters, or background job lifecycle, **or**
-- adding/changing a shared builder, protocol, model, fixture, or migration, **or**
-- integrating a new external dependency or a new path alongside an existing one.
+Run it BEFORE the first line of implementation when the task:
+- spans more than one module or subsystem, **or**
+- touches money/billing, quota counters, or background job lifecycle, **or**
+- adds/changes a shared builder, interface, model, fixture, or migration, **or**
+- integrates a new external dependency or a new path alongside an existing one.
 
 A small local edit inside a single module does not need it.
 
@@ -38,34 +38,34 @@ A small local edit inside a single module does not need it.
 
 List everything the new code will talk to. A seam is any point where you rely on someone else's contract. Typical places seams hide (this is where to look, not what exactly to check):
 
-- **Money / billing / quotas** — does a canonical path already exist (deduction RPC, grant helper, webhook flow), and are you going through it rather than around it.
-- **External dependency** — the real shape of the response from the SDK / API / LLM client (including the empty, blocked, variant, and error responses).
+- **Money / billing / quotas** — does a canonical path already exist (a charge/deduct function, a grant helper, a webhook flow), and are you going through it rather than around it.
+- **External dependency** — the real shape of the response from the SDK / API / external service (including the empty, rejected, variant, and error responses).
 - **An existing path nearby** — if a mock/retry/admin/batch variant of the same action exists, your new path should reuse the canonical one, not copy it.
 - **Shared builder / helper** — every place it is rebuilt or re-invoked, not just the bit you're adding.
-- **Protocol / model / type** — do all implementations implement the full protocol; aren't you passing a raw dict where a typed model is expected.
+- **Interface / model / type** — do all implementations implement the full interface; aren't you passing an untyped bag of fields where a typed model is expected.
 - **Fixtures / fakes** — are they in sync with prod wiring; does the fake record the field you added.
 - **Temporal seams — time, ordering, repeats** — what happens when an event arrives twice (duplicate webhook, retry), out of order (callback before the commit), concurrently (two workers grab the same job), or never (timeout with no answer). Idempotency is a contract like a signature: read whether the existing path guarantees it, don't assume it.
-- **Migrations** — are all columns the code touches in the same migration as that code.
-- **User-facing strings** — through the project's i18n layer, all locales, no hardcoded literals in code.
+- **Schema migrations** — are all columns/fields the code touches actually applied together with that code, in the right order.
+- **User-facing strings** — through the project's i18n layer if it has one, all locales, no hardcoded literals in code.
 
-The project's CLAUDE.md often names the canonical paths and invariants ("Key Patterns", "Non-Obvious Mechanics" and similar sections) — treat those as the project-specific seam map. Don't stop at this list — it covers the typical spots, not all of them. Find the seams specific to your feature.
+The project's agent instructions file (CLAUDE.md, AGENTS.md, CONVENTIONS.md, …) often names the canonical paths and invariants — treat those as the project-specific seam map. Don't stop at this list — it covers the typical spots, not all of them. Find the seams specific to your feature.
 
 ### Step 2. For each seam — assumption → evidence
 
-Don't imagine the contract — **go read it** (Read/Grep on the real file, or the dependency's docs via context7). Fill the table:
+Don't imagine the contract — **go read it** (open the real file, or the dependency's official docs). Fill the table:
 
 | Seam | Assumption | Evidence (what you read) | Enforcement | Risk if the assumption is wrong |
 |---|---|---|---|---|
-| `complete_with_deduction(...)` | deducts exactly 1 credit, idempotent | read the RPC + the call site | by-construction (RPC guard) | double charge / free generation |
-| LLM router response | image bytes in `choices[0].message.content` | read the docs + the router module | runtime guard (validate + raise) | image lost on the success path |
+| `charge_credits(user, amount)` | deducts exactly once, idempotent | read the function + its call sites | by-construction (unique constraint) | double charge / free usage |
+| external API response | payload in `response.items[0].data` | read the docs + one real response | runtime guard (validate + raise) | result lost on the success path |
 
-**Enforcement** is one of three levels: **by-construction** (a type, validator, or DB constraint makes violation impossible), **runtime guard** (checked, fails loudly), **convention** (holds only by discipline). Convention is a red flag: if an assumption can be lifted to by-construction cheaply (a typed model with `extra="forbid"`, NOT NULL, an enum instead of a string), make that part of the design — don't document what you can enforce.
+**Enforcement** is one of three levels: **by-construction** (a type, validator, or DB constraint makes violation impossible), **runtime guard** (checked, fails loudly), **convention** (holds only by discipline). Convention is a red flag: if an assumption can be lifted to by-construction cheaply (a schema that rejects unknown fields, a NOT NULL / unique constraint, an enum instead of a string), make that part of the design — don't document what you can enforce.
 
 If there's no evidence, that's the future bug. Either get the evidence, or mark it a risk and design a guard for it.
 
 ### Step 3. Write out the unhappy path — and the recovery
 
-For each external/existing contract, explicitly list: empty response, error, unusual shape, duplicate/late/concurrent delivery, failure of a secondary write (dedup/audit inside an `except` — don't swallow it silently). These are the future crashes and lost work.
+For each external/existing contract, explicitly list: empty response, error, unusual shape, duplicate/late/concurrent delivery, failure of a secondary write (dedup/audit inside an error handler — don't swallow it silently). These are the future crashes and lost work.
 
 Listing the failure is half the job. For each one, write what the system **does** and who sees it, one line each:
 
