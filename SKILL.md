@@ -1,6 +1,6 @@
 ---
 name: seam-audit
-description: Use BEFORE writing the code for any non-trivial feature, refactor, or change that touches more than one module — especially anything touching money/billing/quotas, background job lifecycle, shared builders/helpers, external dependencies (SDKs, APIs, external services), schema migrations, or user-facing strings. The skill front-loads the contract/seam checking that normally only happens during code review, so the bugs that usually surface in review (broken contracts at the seams between new code and existing systems or external dependencies) are caught at design time instead. Triggers include "new feature", "design a feature", "implement feature", "before writing code", "large PR", "seam audit", "check the seams", "feature-dev". Run it FIRST, before the first line of implementation. Output is a seam-audit table (seam → assumption → evidence) plus the unhappy-path list, then implementation proceeds.
+description: Use BEFORE writing code for any non-trivial feature, refactor, or change spanning more than one module — especially anything touching money/billing/quotas, background job lifecycle, shared builders/helpers, external SDKs/APIs, schema migrations, or user-facing strings. Triggers include "new feature", "design a feature", "implement feature", "before writing code", "large PR", "seam audit", "check the seams". Run it FIRST, before the first line of implementation.
 ---
 
 # Seam Audit — review the design before writing the code
@@ -9,11 +9,7 @@ description: Use BEFORE writing the code for any non-trivial feature, refactor, 
 
 Observation from analyzing large PRs: the bugs that surface in review almost never live in the new "core" of a feature. They sit at the **seams** — where new code meets (a) existing subsystems and their invariants, and (b) external dependencies and their contracts. Real examples: credits deducted bypassing the canonical path; "the provider didn't raise" treated as success; a video URL sent through a photo-only API; an SDK returning a valid variant shape that the code judged as an empty response; a test fixture drifting from prod service wiring; `create()` inserting columns from a not-yet-applied migration; a hardcoded user-facing string instead of the i18n layer.
 
-**Why this gets caught in review but not at design time:** in review the real code is in front of you — the neighbor's actual signature, the actual payload, the actual existing path. The reviewer is in "verify against reality" mode. At design time those contracts aren't in front of you — they're imagined, and the generative mode fills in *how the neighbor probably looks*, walking the happy path.
-
-**What this skill does:** it forces you to put the source of truth in front of you BEFORE writing a line — read the real neighbor instead of imagining it. This moves the reviewer's free advantage one step earlier.
-
-This is not a new observation. Margaret Hamilton's error analysis of the Apollo flight software found that ~73% of errors were **interface errors** — modules disagreeing about data, timing, or control at their boundaries — which led to her "Development Before the Fact" paradigm: prevent interface errors at definition time instead of finding them in test. This skill is the informal, evidence-driven version of that idea.
+Review catches these because the real code is in front of the reviewer; at design time contracts are imagined, and the generative mode fills in *how the neighbor probably looks*, walking the happy path. This skill puts the source of truth in front of you BEFORE the first line — read the real neighbor instead of imagining it.
 
 ## When to apply
 
@@ -21,7 +17,8 @@ Run it BEFORE the first line of implementation when the task:
 - spans more than one module or subsystem, **or**
 - touches money/billing, quota counters, or background job lifecycle, **or**
 - adds/changes a shared builder, interface, model, fixture, or migration, **or**
-- integrates a new external dependency or a new path alongside an existing one.
+- integrates a new external dependency or a new path alongside an existing one, **or**
+- adds/changes user-facing strings in a project with an i18n layer.
 
 A small local edit inside a single module does not need it.
 
