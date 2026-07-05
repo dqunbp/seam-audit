@@ -49,14 +49,14 @@ The project's agent instructions file (CLAUDE.md, AGENTS.md, CONVENTIONS.md, …
 
 ### Step 2. For each seam — assumption → evidence
 
-Don't imagine the contract — **go read it** (open the real file, or the dependency's official docs). Fill the table:
+Don't imagine the contract — **go read it** (open the real file, or the dependency's official docs — via a docs tool like context7 if one is available). Fill the table:
 
 | Seam | Assumption | Evidence (what you read) | Enforcement | Risk if the assumption is wrong |
 |---|---|---|---|---|
 | `charge_credits(user, amount)` | deducts exactly once, idempotent | read the function + its call sites | by-construction (unique constraint) | double charge / free usage |
 | external API response | payload in `response.items[0].data` | read the docs + one real response | runtime guard (validate + raise) | result lost on the success path |
 
-**Enforcement** is one of three levels: **by-construction** (a type, validator, or DB constraint makes violation impossible), **runtime guard** (checked, fails loudly), **convention** (holds only by discipline). Convention is a red flag: if an assumption can be lifted to by-construction cheaply (a schema that rejects unknown fields, a NOT NULL / unique constraint, an enum instead of a string), make that part of the design — don't document what you can enforce.
+**Enforcement** is one of three levels: **by-construction** (a type, validator, or DB constraint makes violation impossible), **runtime guard** (checked, fails loudly), **convention** (holds only by discipline). Convention is a red flag: if an assumption can be lifted to by-construction cheaply (a schema that rejects unknown fields — e.g. pydantic's `extra="forbid"` in Python — a NOT NULL / unique constraint, an enum instead of a string), make that part of the design — don't document what you can enforce.
 
 If there's no evidence, that's the future bug. Either get the evidence, or mark it a risk and design a guard for it.
 
