@@ -1,0 +1,7 @@
+This is pretix, an event ticketing system (Django). Pending orders whose payment deadline has passed are supposed to be marked as expired automatically by a periodic background job, but that job is missing: nothing ever expires unpaid orders.
+
+Implement it as `expire_orders(sender, **kwargs)` in `src/pretix/base/services/orders.py`, run by pretix's periodic task mechanism in the same way as the other periodic jobs. It must respect the event's payment settings.
+
+Add tests for it. The development environment is installed: run tests from `src/` with `python -m pytest <test files>` (the full suite is very slow, so run the relevant test files).
+
+Before you start, use the `seam-audit` skill.

@@ -1,0 +1,215 @@
+diff --git a/src/pretix/base/services/orders.py b/src/pretix/base/services/orders.py
+index 83f8743..d389cda 100644
+--- a/src/pretix/base/services/orders.py
++++ b/src/pretix/base/services/orders.py
+@@ -637,6 +637,71 @@ def _cancel_order(order, user=None, send_mail: bool=True, api_token=None, device
+     return order.pk
+ 
+ 
++def reactivate_order(order: Order, force: bool=False, user: User=None, auth=None):
++    """
++    Reverts the cancellation of an order done by ``_cancel_order``. The order is set back to pending, or to paid
++    if it has already been paid. If ``force`` is set to ``True``, the availability of the ordered products is
++    not checked.
++    :param order: The order to change
++    :param user: The user that performed the change
++    """
++    with transaction.atomic():
++        order = Order.objects.select_for_update(of=OF_SELF).get(pk=order.pk)
++        if order.status != Order.STATUS_CANCELED:
++            raise OrderError(_('This order is not canceled.'))
++
++        is_available = order._is_still_available(
++            now(), count_waitinglist=False, lock=True, force=force, check_voucher_usage=True,
++            check_memberships=not force,
++        )
++        if is_available is not True:
++            raise OrderError(is_available)
++
++        # Reverse of each step in _cancel_order()
++        for position in order.positions.all():
++            for gc in position.issued_gift_cards.all():
++                gc = GiftCard.objects.select_for_update(of=OF_SELF).get(pk=gc.pk)
++                gc.transactions.create(value=position.price, order=order, acceptor=order.event.organizer)
++                gc.log_action(
++                    action='pretix.giftcards.transaction.manual',
++                    user=user,
++                    data={
++                        'value': position.price,
++                        'acceptor_id': order.event.organizer.id,
++                        'acceptor_slug': order.event.organizer.slug
++                    }
++                )
++
++            for m in position.granted_memberships.all():
++                m.canceled = False
++                m.save()
++
++            if position.voucher:
++                Voucher.objects.filter(pk=position.voucher.pk).update(redeemed=F('redeemed') + 1)
++
++        order.status = Order.STATUS_PAID if order.payment_refund_sum >= order.total else Order.STATUS_PENDING
++        order.cancellation_date = None
++        if order.status == Order.STATUS_PENDING:
++            order.set_expires(now(), order.event.subevents.filter(id__in=[p.subevent_id for p in order.positions.all()]))
++        order.save(update_fields=['status', 'cancellation_date', 'expires'])
++
++        num_invoices = order.invoices.filter(is_cancellation=False).count()
++        if num_invoices > 0 and order.invoices.filter(is_cancellation=True).count() >= num_invoices and invoice_qualified(order):
++            try:
++                generate_invoice(order)
++            except Exception as e:
++                logger.exception("Could not generate invoice.")
++                order.log_action("pretix.event.order.invoice.failed", data={
++                    "exception": str(e)
++                })
++
++        order.create_transactions()
++
++        order.log_action('pretix.event.order.reactivated', user=user, auth=auth)
++
++    order_reactivated.send(order.event, order=order)
++
++
+ def _check_date(event: Event, now_dt: datetime):
+     if event.presale_start and now_dt < event.presale_start:
+         raise OrderError(error_messages['not_started'])
+diff --git a/src/tests/base/test_orders.py b/src/tests/base/test_orders.py
+index 61b99bf..152f41b 100644
+--- a/src/tests/base/test_orders.py
++++ b/src/tests/base/test_orders.py
+@@ -55,7 +55,8 @@ from pretix.base.services.invoices import (
+ )
+ from pretix.base.services.orders import (
+     OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,
+-    deny_order, expire_orders, send_download_reminders, send_expiry_warnings,
++    deny_order, expire_orders, reactivate_order, send_download_reminders,
++    send_expiry_warnings,
+ )
+ from pretix.plugins.banktransfer.payment import BankTransfer
+ from pretix.testutils.mock import mocker_context
+@@ -1505,6 +1506,124 @@ class OrderCancelTests(TestCase):
+         assert self.order.all_logentries().filter(action_type='pretix.event.order.refund.requested').exists()
+ 
+ 
++class OrderReactivateTests(TestCase):
++    def setUp(self):
++        super().setUp()
++        self.o = Organizer.objects.create(name='Dummy', slug='dummy')
++        with scope(organizer=self.o):
++            self.event = Event.objects.create(organizer=self.o, name='Dummy', slug='dummy', date_from=now(),
++                                              plugins='tests.testdummy')
++            self.order = Order.objects.create(
++                code='FOO', event=self.event, email='dummy@dummy.test',
++                status=Order.STATUS_PENDING, locale='en',
++                datetime=now(), expires=now() + timedelta(days=10),
++                total=Decimal('46.00'),
++                sales_channel=self.event.organizer.sales_channels.get(identifier="web"),
++            )
++            self.ticket = Item.objects.create(event=self.event, name='Early-bird ticket',
++                                              default_price=Decimal('23.00'), admission=True)
++            self.op1 = OrderPosition.objects.create(
++                order=self.order, item=self.ticket, variation=None,
++                price=Decimal("23.00"), attendee_name_parts={'full_name': "Peter"}, positionid=1
++            )
++            self.op2 = OrderPosition.objects.create(
++                order=self.order, item=self.ticket, variation=None,
++                price=Decimal("23.00"), attendee_name_parts={'full_name': "Dieter"}, positionid=2
++            )
++            self.quota = self.event.quotas.create(name='Q', size=None)
++            self.quota.items.add(self.ticket)
++            self.order.create_transactions()
++            generate_invoice(self.order)
++            djmail.outbox = []
++
++    @classscope(attr='o')
++    def test_not_canceled(self):
++        with pytest.raises(OrderError):
++            reactivate_order(self.order)
++
++    @classscope(attr='o')
++    def test_unpaid(self):
++        cancel_order(self.order.pk, send_mail=False)
++        reactivate_order(self.order)
++        self.order.refresh_from_db()
++        assert self.order.status == Order.STATUS_PENDING
++        assert self.order.cancellation_date is None
++        assert self.order.expires > now()
++        assert self.order.all_logentries().first().action_type == 'pretix.event.order.reactivated'
++        assert self.order.invoices.filter(is_cancellation=False).count() == 2
++        assert self.order.invoices.filter(is_cancellation=True).count() == 1
++
++    @classscope(attr='o')
++    def test_paid(self):
++        self.order.status = Order.STATUS_PAID
++        self.order.save()
++        self.order.payments.create(state=OrderPayment.PAYMENT_STATE_CONFIRMED, amount=46)
++        cancel_order(self.order.pk, send_mail=False)
++        reactivate_order(self.order)
++        self.order.refresh_from_db()
++        assert self.order.status == Order.STATUS_PAID
++        assert self.order.cancellation_date is None
++        assert self.order.transactions.aggregate(s=Sum(F('price') * F('count')))['s'] == Decimal('46.00')
++
++    @classscope(attr='o')
++    def test_partially_paid_becomes_pending(self):
++        self.order.payments.create(state=OrderPayment.PAYMENT_STATE_CONFIRMED, amount=10)
++        cancel_order(self.order.pk, send_mail=False)
++        reactivate_order(self.order)
++        self.order.refresh_from_db()
++        assert self.order.status == Order.STATUS_PENDING
++
++    @classscope(attr='o')
++    def test_unavailable(self):
++        self.quota.size = 1
++        self.quota.save()
++        cancel_order(self.order.pk, send_mail=False)
++        with pytest.raises(OrderError):
++            reactivate_order(self.order)
++        self.order.refresh_from_db()
++        assert self.order.status == Order.STATUS_CANCELED
++
++    @classscope(attr='o')
++    def test_unavailable_forced(self):
++        self.quota.size = 1
++        self.quota.save()
++        cancel_order(self.order.pk, send_mail=False)
++        reactivate_order(self.order, force=True)
++        self.order.refresh_from_db()
++        assert self.order.status == Order.STATUS_PENDING
++
++    @classscope(attr='o')
++    def test_voucher_restored(self):
++        voucher = self.event.vouchers.create(item=self.ticket, max_usages=5, redeemed=1)
++        self.op1.voucher = voucher
++        self.op1.save()
++        cancel_order(self.order.pk, send_mail=False)
++        voucher.refresh_from_db()
++        assert voucher.redeemed == 0
++        reactivate_order(self.order)
++        voucher.refresh_from_db()
++        assert voucher.redeemed == 1
++
++    @classscope(attr='o')
++    def test_voucher_used_up_in_the_meantime(self):
++        voucher = self.event.vouchers.create(item=self.ticket, max_usages=1, redeemed=1)
++        self.op1.voucher = voucher
++        self.op1.save()
++        cancel_order(self.order.pk, send_mail=False)
++        self.event.vouchers.filter(pk=voucher.pk).update(redeemed=1)
++        with pytest.raises(OrderError):
++            reactivate_order(self.order)
++        self.order.refresh_from_db()
++        assert self.order.status == Order.STATUS_CANCELED
++
++    @classscope(attr='o')
++    def test_twice(self):
++        cancel_order(self.order.pk, send_mail=False)
++        reactivate_order(self.order)
++        with pytest.raises(OrderError):
++            reactivate_order(self.order)
++
++
+ class BaseOrderChangeManagerTestCase:
+     def setUp(self):
+         super().setUp()

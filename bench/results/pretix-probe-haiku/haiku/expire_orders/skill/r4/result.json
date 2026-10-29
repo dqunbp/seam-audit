@@ -1,0 +1,67 @@
+{
+  "run_id": "haiku/expire_orders/skill/r4",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "expire_orders",
+  "condition": "skill",
+  "rep": 4,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 172.2,
+  "cost_usd": 0.03754597,
+  "num_turns": 28,
+  "duration_s": 170.4,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 19,
+    "Edit": 5,
+    "Read": 1
+  },
+  "files_read": [
+    "src/tests/base/test_orders.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "ls; cat CLAUDE.md AGENTS.md 2>/dev/null | head -100; git status | head; grep -rn \"periodic_task\\|expire\" src/pretix/base/services/orders.py | head -60; grep -rn \"@periodic_task\" src/pretix | head -30",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/skill/r4/repo/src && sed -n 355,400p pretix/base/services/orders.py; echo ----; sed -n 1430,1520p pretix/base/services/orders.py; echo ----; grep -rn \"payment_term_expire_automatically\\|def set_expires\\|payment_term_last\" pretix --include=*.py | grep -v tests | head -40",
+    "sed -n 620,660p pretix/base/models/orders.py; echo ----; sed -n 930,1050p pretix/base/models/orders.py; echo ----; sed -n 1060,1090p pretix/base/settings.py; echo ----; git log --oneline -3 -- pretix/base/services/orders.py; git log -S\"def expire_orders\" --oneline | head -5; grep -rn \"expire_orders\\|expired_orders\" pretix --include=*.py | head",
+    "grep -rn \"periodic_task\" pretix/base/signals.py pretix/base/services/*.py pretix/celery_app.py pretix/base/tasks.py 2>/dev/null | head; grep -rn \"def minimum_interval\" -A30 pretix | head -50; grep -rn \"periodic_task\" pretix --include=*.py | grep -v \"@receiver\" | head; echo ----; grep -rln \"send_expiry_warnings\\|expiry_warning\" pretix/tests | head; grep -rn \"def test.*expir\" pretix/tests/base/test_orders.py | head -20",
+    "sed -n 1,80p pretix/helpers/periodic.py | sed -n 60,80p; echo ----; sed -n 40,60p pretix/base/services/cleanup.py; echo ----; grep -rln \"send_expiry_warnings\\|mark_order_expired\" tests | head; echo ----; grep -rn \"def test\" tests/base/test_orders.py 2>/dev/null | grep -i expir | head -20; echo ---; grep -n \"^from\\|^import\" pretix/base/services/orders.py | head -80",
+    "grep -rn \"mark_order_expired\\|order_expired\\b\" pretix --include=*.py | grep -v \"^.*#\" | head -30; echo ----; sed -n 1,30p tests/base/test_orders.py | grep -n \"import\" ; sed -n 60,100p tests/base/test_orders.py; echo ----; sed -n 139,165p tests/base/test_orders.py",
+    "grep -rn \"payment_term_expire_date\\|is_expired_by_time\" pretix --include=*.py | head -20; echo ----; grep -rn \"order_expired\" pretix --include=*.py | grep -v \"signals.py\\|services/orders.py\" | head; echo ----; grep -rn \"order.expired\\|STATUS_EXPIRED\" pretix/base/services/orders.py | head -30; echo ----; sed -n 1075,1085p pretix/base/settings.py >/dev/null; grep -n \"'payment_term_expire_delay_days'\" -A8 pretix/base/settings.py | head -12",
+    "grep -rn \"periodic_task.send\\|periodic_task\" pretix/base/services/tasks.py pretix/celery_app.py pretix/base/tasks.py pretix/*.py 2>/dev/null | head; grep -rn \"beat_schedule\\|periodic\" pretix/celery_app.py pretix/settings.py 2>/dev/null | head; echo ----; grep -rn \"send_expiry_warnings\\|clean_cart_positions(\\|periodic_task.send\\|periodic_run\" tests --include=*.py | head -8; echo ----; grep -n \"def test_sent_no_expiry\" -B30 tests/base/test_orders.py | grep -n \"def \\|send_expiry\\|periodic\" | head",
+    "grep -rn \"periodic_task\" pretix --include=*.py -l | xargs grep -ln \"def \\(run\\|periodic\\)\\|\\.send(\" | head; grep -rln \"periodic_task\" pretix/base/services/tasks.py pretix/base/tasks.py pretix/celery_app.py 2>/dev/null; grep -rn \"signal.send\\|periodic_task.send\\|periodic_task.send_robust\" pretix --include=*.py | head -5; sed -n 640,700p tests/base/test_orders.py | head -70",
+    "sed -n 55,80p pretix/base/management/commands/runperiodic.py; echo ----; grep -n \"def test_disabled\" -B3 tests/base/test_orders.py | head -3; grep -rn \"payment_term_expire_automatically\" tests --include=*.py | head -5; echo ----; grep -n \"select_for_update\\|def mark_order_paid\" pretix/base/services/orders.py | head -5; grep -n \"def _create_order\" tests/base/test_orders.py",
+    "sed -n 22,62p tests/base/test_orders.py; echo ----; sed -n 163,200p tests/base/test_orders.py; echo ----; grep -n \"^logger\\|OrderFee,\\|    Order,\\|OrderFee\" pretix/base/services/orders.py | head -5; sed -n 69,74p pretix/base/services/orders.py",
+    "wc -l tests/base/test_orders.py && tail -5 tests/base/test_orders.py && grep -n \"^from unittest\\|^import\\|def all_logentries\" tests/base/test_orders.py pretix/base/models/base.py | head",
+    "python - <<'EOF'\nimport re\np = 'tests/base/test_orders.py'\ns = open(p).read()\n\ns = s.replace(\"import json\\nimport zoneinfo\\nfrom datetime import date, datetime, timedelta\\nfrom decimal import Decimal\\nfrom zoneinfo import ZoneInfo\\n\",\n              \"import json\\nimport zoneinfo\\nfrom datetime import date, datetime, timedelta\\nfrom decimal import Decimal\\nfrom unittest import mock\\nfrom zoneinfo import ZoneInfo\\n\", 1)\ns = s.replace(\"    OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,\\n    deny_order, reactivate_order, send_download_reminders,\\n    send_expiry_warnings,\\n)\",\n              \"    OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,\\n    deny_order, expire_orders, mark_order_expired, reactivate_order,\\n    send_download_reminders, send_expiry_warnings,\\n)\", 1)\n\ns += '''\n\nclass OrderExpiryTests(TestCase):\n    def setUp(self):\n        super().setUp()\n        self.o = Organizer.objects.create(name='Dummy', slug='dummy')\n        with scope(organizer=self.o):\n            self.event = Event.objects.create(\n                organizer=self.o, name='Dummy', slug='dummy',\n                date_from=now() + timedelta(days=2),\n                plugins='pretix.plugins.banktransfer'\n            )\n            self.event.settings.payment_term_weekdays = False\n\n    def _order(self, code, expires=None, status=Order.STATUS_PENDING, event=None, **kwargs):\n        return Order.objects.create(\n            code=code, event=event or self.event, email='dummy@dummy.test',\n            status=status, locale='en',\n            datetime=now() - timedelta(days=10),\n            expires=expires if expires is not None else now() - timedelta(hours=1),\n            total=Decimal('46.00'),\n            sales_channel=self.event.organizer.sales_channels.get(identifier=\"web\"),\n            **kwargs\n        )\n\n    @classscope(attr='o')\n    def test_expires_overdue_pending_order(self):\n        order = self._order('A1')\n        expire_orders(sender=self.event)\n        order.refresh_from_db()\n        assert order.status == Order.STATUS_EXPIRED\n        assert order.all_logentries().filter(action_type='pretix.event.order.expired').exists()\n\n    @classscope(attr='o')\n    def test_keeps_order_with_future_deadline(self):\n        order = self._order('A1', expires=now() + timedelta(days=1))\n        expire_orders(sender=self.event)\n        order.refresh_from_db()\n        assert order.status == Order.STATUS_PENDING\n\n    @classscope(attr='o')\n    def test_keeps_non_pending_orders(self):\n        paid = self._order('A1', status=Order.STATUS_PAID)\n        canceled = self._order('A2', status=Order.STATUS_CANCELED)\n        expire_orders(sender=self.event)\n        paid.refresh_from_db()\n        canceled.refresh_from_db()\n        assert paid.status == Order.STATUS_PAID\n        assert canceled.status == Order.STATUS_CANCELED\n\n    @classscope(attr='o')\n    def test_respects_disabled_automatic_expiry(self):\n        self.event.settings.payment_term_expire_automatically = False\n        order = self._order('A1')\n        expire_orders(sender=self.event)\n        order.refresh_from_db()\n        assert order.status == Order.STATUS_PENDING\n\n    @classscope(attr='o')\n    def test_respects_per_event_setting(self):\n        self.event.settings.payment_term_expire_automatically = False\n        other = Event.objects.create(\n            organizer=self.o, name='Other', slug='other',\n            date_from=now() + timedelta(days=2),\n            plugins='pretix.plugins.banktransfer'\n        )\n        other.settings.payment_term_weekdays = False\n        disabled_order = self._order('A1')\n        enabled_order = self._order('B1', event=other)\n        expire_orders(sender=self.event)\n        disabled_order.refresh_from_db()\n        enabled_order.refresh_from_db()\n        assert disabled_order.status == Order.STATUS_PENDING\n        assert enabled_order.status == Order.STATUS_EXPIRED\n\n    @classscope(attr='o')\n    def test_respects_expiry_delay(self):\n        self.event.settings.payment_term_expire_delay_days = 3\n        recent = self._order('A1', expires=now() - timedelta(hours=1))\n        old = self._order('A2', expires=now() - timedelta(days=4))\n        expire_orders(sender=self.event)\n        recent.refresh_from_db()\n        old.refresh_from_db()\n        assert recent.status == Order.STATUS_PENDING\n        assert old.status == Order.STATUS_EXPIRED\n\n    @classscope(attr='o')\n    def test_expires_when_last_payment_date_has_passed(self):\n        self.event.settings.payment_term_expire_delay_days = 10\n        self.event.settings.set('payment_term_last', now() - timedelta(days=1))\n        order = self._order('A1')\n        expire_orders(sender=self.event)\n        order.refresh_from_db()\n        assert order.status == Order.STATUS_EXPIRED\n\n    @classscope(attr='o')\n    def test_skips_orders_that_must_not_expire(self):\n        approval = self._order('A1', require_approval=True)\n        valid = self._order('A2', valid_if_pending=True)\n        with_fee = self._order('A3')\n        OrderFee.objects.create(order=with_fee, fee_type=OrderFee.FEE_TYPE_CANCELLATION, value=Decimal('1.00'))\n        expire_orders(sender=self.event)\n        for order in (approval, valid, with_fee):\n            order.refresh_from_db()\n            assert order.status == Order.STATUS_PENDING\n\n    @classscope(attr='o')\n    def test_failure_on_one_order_does_not_stop_others(self):\n        failing = self._order('A1')\n        other = self._order('A2')\n        real_mark_order_expired = mark_order_expired\n\n        def flaky(order, *args, **kwargs):\n            if order.pk == failing.pk:\n                raise Exception('boom')\n            return real_mark_order_expired(order, *args, **kwargs)\n\n        with mock.patch('pretix.base.services.orders.mark_order_expired', side_effect=flaky):\n            expire_orders(sender=self.event)\n        failing.refresh_from_db()\n        other.refresh_from_db()\n        assert failing.status == Order.STATUS_PENDING\n        assert other.status == Order.STATUS_EXPIRED\n'''\nopen(p, 'w').write(s)\nEOF\ngrep -n \"OrderExpiryTests\\|from unittest import mock\\|expire_orders, mark_order_expired\" tests/base/test_orders.py",
+    "timeout 580 python -m pytest tests/base/test_orders.py -k \"OrderExpiryTests or PaymentReminderTests or test_expiry\" -q -p no:cacheprovider 2>&1 | tail -40",
+    "(python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -15; echo \"flake8 exit: $?\"); (python -m isort --check-only --diff pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -15; echo \"isort done\")",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit $?\"",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/skill/r4/repo && git diff --stat && git diff src/pretix/base/services/orders.py",
+    "git -C /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/skill/r4/repo diff --stat"
+  ],
+  "seam_table": true,
+  "output_chars": 6617,
+  "hidden": {
+    "base.test_orders::test_expiring": true,
+    "base.test_orders::test_expiring_paid_invoice": true,
+    "base.test_orders::test_expire_twice": true,
+    "base.test_orders::test_expire_skipped_if_canceled_with_fee": true,
+    "base.test_orders::test_expiring_auto_disabled": true,
+    "base.test_orders::test_expiring_auto_delayed": true,
+    "base.test_orders::test_expiring_auto_delayed_weekdays": true,
+    "base.test_orders::test_do_not_expire_if_approval_pending": true
+  },
+  "hidden_passed": 8,
+  "hidden_total": 8,
+  "visible_green": true,
+  "visible_passed": 431,
+  "visible_total": 431,
+  "diff_lines": 169
+}

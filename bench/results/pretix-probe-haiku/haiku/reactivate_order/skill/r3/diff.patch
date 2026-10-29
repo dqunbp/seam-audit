@@ -1,0 +1,276 @@
+diff --git a/src/pretix/base/services/orders.py b/src/pretix/base/services/orders.py
+index 83f8743..7e39381 100644
+--- a/src/pretix/base/services/orders.py
++++ b/src/pretix/base/services/orders.py
+@@ -637,6 +637,73 @@ def _cancel_order(order, user=None, send_mail: bool=True, api_token=None, device
+     return order.pk
+ 
+ 
++def reactivate_order(order: Order, force: bool=False, user: User=None, auth=None):
++    """
++    Reverts the cancellation of a canceled order, restoring it to the state it would have had if it had never
++    been canceled: ``paid`` if the order has been paid in full, ``pending`` otherwise. Unless ``force`` is set,
++    the ordered products have to be available again.
++    :param order: The order to change
++    :param user: The user that performed the change
++    """
++    with transaction.atomic():
++        order = Order.objects.select_for_update(of=OF_SELF).get(pk=order.pk)
++        if order.status != Order.STATUS_CANCELED:
++            raise OrderError(_('Only canceled orders can be reactivated.'))
++
++        is_available = order._is_still_available(
++            now(), count_waitinglist=False, lock=True, force=force,
++            check_voucher_usage=True, check_memberships=True,
++        )
++        if is_available is not True:
++            raise OrderError(is_available)
++
++        # Reverse every action taken in _cancel_order()
++        for position in order.positions.all():
++            if position.voucher:
++                Voucher.objects.filter(pk=position.voucher.pk).update(redeemed=F('redeemed') + 1)
++
++            for gc in position.issued_gift_cards.all():
++                gc = GiftCard.objects.select_for_update(of=OF_SELF).get(pk=gc.pk)
++                gc.transactions.create(value=position.price, order=order, acceptor=order.event.organizer)
++                gc.log_action(
++                    action='pretix.giftcards.transaction.manual',
++                    user=user,
++                    data={
++                        'value': position.price,
++                        'acceptor_id': order.event.organizer.id,
++                        'acceptor_slug': order.event.organizer.slug
++                    }
++                )
++
++            for m in position.granted_memberships.all():
++                m.canceled = False
++                m.save()
++
++        if order.payment_refund_sum >= order.total:
++            order.status = Order.STATUS_PAID
++        else:
++            order.status = Order.STATUS_PENDING
++            order.set_expires(now())
++        order.cancellation_date = None
++        order.save(update_fields=['status', 'expires', 'cancellation_date'])
++
++        num_invoices = order.invoices.filter(is_cancellation=False).count()
++        if num_invoices > 0 and order.invoices.filter(is_cancellation=True).count() >= num_invoices and invoice_qualified(order):
++            try:
++                generate_invoice(order)
++            except Exception as e:
++                logger.exception("Could not generate invoice.")
++                order.log_action("pretix.event.order.invoice.failed", data={
++                    "exception": str(e)
++                })
++
++        order.log_action('pretix.event.order.reactivated', user=user, auth=auth)
++        order.create_transactions()
++
++    order_reactivated.send(order.event, order=order)
++    return order.pk
++
++
+ def _check_date(event: Event, now_dt: datetime):
+     if event.presale_start and now_dt < event.presale_start:
+         raise OrderError(error_messages['not_started'])
+diff --git a/src/tests/api/test_orders.py b/src/tests/api/test_orders.py
+index ead5e94..b8fb955 100644
+--- a/src/tests/api/test_orders.py
++++ b/src/tests/api/test_orders.py
+@@ -1451,6 +1451,51 @@ def test_order_mark_paid_locked(token_client, organizer, event, order):
+     assert order.status == Order.STATUS_EXPIRED
+ 
+ 
++@pytest.mark.django_db
++def test_order_reactivate(token_client, organizer, event, order, quota):
++    with scopes_disabled():
++        order.status = Order.STATUS_CANCELED
++        order.save()
++    resp = token_client.post(
++        '/api/v1/organizers/{}/events/{}/orders/{}/reactivate/'.format(
++            organizer.slug, event.slug, order.code
++        )
++    )
++    assert resp.status_code == 200
++    assert resp.data['status'] in (Order.STATUS_PENDING, Order.STATUS_PAID)
++    with scopes_disabled():
++        order.refresh_from_db()
++        assert order.status != Order.STATUS_CANCELED
++
++
++@pytest.mark.django_db
++def test_order_reactivate_not_canceled(token_client, organizer, event, order):
++    resp = token_client.post(
++        '/api/v1/organizers/{}/events/{}/orders/{}/reactivate/'.format(
++            organizer.slug, event.slug, order.code
++        )
++    )
++    assert resp.status_code == 400
++
++
++@pytest.mark.django_db
++def test_order_reactivate_quota_empty(token_client, organizer, event, order, quota):
++    with scopes_disabled():
++        order.status = Order.STATUS_CANCELED
++        order.save()
++        quota.size = 0
++        quota.save()
++    resp = token_client.post(
++        '/api/v1/organizers/{}/events/{}/orders/{}/reactivate/'.format(
++            organizer.slug, event.slug, order.code
++        )
++    )
++    assert resp.status_code == 400
++    with scopes_disabled():
++        order.refresh_from_db()
++        assert order.status == Order.STATUS_CANCELED
++
++
+ @pytest.mark.django_db
+ def test_order_mark_canceled_pending(token_client, organizer, event, order):
+     with scopes_disabled():
+diff --git a/src/tests/base/test_orders.py b/src/tests/base/test_orders.py
+index 61b99bf..b43c449 100644
+--- a/src/tests/base/test_orders.py
++++ b/src/tests/base/test_orders.py
+@@ -55,7 +55,8 @@ from pretix.base.services.invoices import (
+ )
+ from pretix.base.services.orders import (
+     OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,
+-    deny_order, expire_orders, send_download_reminders, send_expiry_warnings,
++    deny_order, expire_orders, reactivate_order, send_download_reminders,
++    send_expiry_warnings,
+ )
+ from pretix.plugins.banktransfer.payment import BankTransfer
+ from pretix.testutils.mock import mocker_context
+@@ -774,6 +775,127 @@ def test_deny(event):
+     assert 'denied' in djmail.outbox[0].subject
+ 
+ 
++def _make_order_with_quota(event, quota_size=10):
++    ticket = Item.objects.create(event=event, name='Ticket', default_price=Decimal('23.00'), admission=True)
++    quota = event.quotas.create(name='Tickets', size=quota_size)
++    quota.items.add(ticket)
++    order = Order.objects.create(
++        code='FOO', event=event, email='dummy@dummy.test',
++        status=Order.STATUS_PENDING, locale='en',
++        datetime=now(), expires=now() + timedelta(days=10),
++        total=Decimal('23.00'),
++        sales_channel=event.organizer.sales_channels.get(identifier="web"),
++    )
++    op = OrderPosition.objects.create(
++        order=order, item=ticket, variation=None,
++        price=Decimal('23.00'), attendee_name_parts={'full_name': 'Peter'}, positionid=1
++    )
++    order.create_transactions()
++    return order, op, quota
++
++
++@pytest.mark.django_db
++def test_reactivate_canceled_unpaid_order(event):
++    order, op, quota = _make_order_with_quota(event)
++    cancel_order(order.pk, send_mail=False)
++    order.refresh_from_db()
++    assert order.status == Order.STATUS_CANCELED
++
++    reactivate_order(order, user=None)
++    order.refresh_from_db()
++    assert order.status == Order.STATUS_PENDING
++    assert order.cancellation_date is None
++    assert order.expires > now()
++    assert order.all_logentries().filter(action_type='pretix.event.order.reactivated').exists()
++
++    # Transactions must already be in sync with the order, so re-running the reconciliation changes nothing
++    n = order.transactions.count()
++    order.create_transactions()
++    assert order.transactions.count() == n
++
++
++@pytest.mark.django_db
++def test_reactivate_canceled_paid_order(event):
++    order, op, quota = _make_order_with_quota(event)
++    order.status = Order.STATUS_PAID
++    order.save()
++    order.payments.create(state=OrderPayment.PAYMENT_STATE_CONFIRMED, amount=Decimal('23.00'))
++    cancel_order(order.pk, send_mail=False)
++    order.refresh_from_db()
++    assert order.status == Order.STATUS_CANCELED
++
++    reactivate_order(order)
++    order.refresh_from_db()
++    assert order.status == Order.STATUS_PAID
++    assert order.cancellation_date is None
++
++
++@pytest.mark.django_db
++def test_reactivate_requires_canceled_order(event):
++    order, op, quota = _make_order_with_quota(event)
++    with pytest.raises(OrderError):
++        reactivate_order(order)
++    order.refresh_from_db()
++    assert order.status == Order.STATUS_PENDING
++
++
++@pytest.mark.django_db
++def test_reactivate_unavailable_product(event):
++    order, op, quota = _make_order_with_quota(event)
++    cancel_order(order.pk, send_mail=False)
++    quota.size = 0
++    quota.save()
++
++    with pytest.raises(OrderError):
++        reactivate_order(order)
++    order.refresh_from_db()
++    assert order.status == Order.STATUS_CANCELED
++
++
++@pytest.mark.django_db
++def test_reactivate_unavailable_product_forced(event):
++    order, op, quota = _make_order_with_quota(event)
++    cancel_order(order.pk, send_mail=False)
++    quota.size = 0
++    quota.save()
++
++    reactivate_order(order, force=True)
++    order.refresh_from_db()
++    assert order.status == Order.STATUS_PENDING
++
++
++@pytest.mark.django_db
++def test_reactivate_restores_voucher_redemption(event):
++    order, op, quota = _make_order_with_quota(event)
++    voucher = event.vouchers.create(item=op.item, max_usages=1, redeemed=1)
++    op.voucher = voucher
++    op.save()
++
++    cancel_order(order.pk, send_mail=False)
++    voucher.refresh_from_db()
++    assert voucher.redeemed == 0
++
++    reactivate_order(order)
++    voucher.refresh_from_db()
++    assert voucher.redeemed == 1
++
++
++@pytest.mark.django_db
++def test_reactivate_restores_issued_gift_card(event):
++    order, op, quota = _make_order_with_quota(event)
++    gc = event.organizer.issued_gift_cards.create(currency="EUR", issued_in=op)
++    gc.transactions.create(value=Decimal('23.00'), order=order, acceptor=event.organizer)
++    assert gc.value == Decimal('23.00')
++
++    cancel_order(order.pk, send_mail=False)
++    gc.refresh_from_db()
++    assert gc.value == Decimal('0.00')
++
++    reactivate_order(order)
++    gc.refresh_from_db()
++    assert gc.value == Decimal('23.00')
++
++
+ @pytest.mark.django_db(transaction=True)
+ def test_mark_invoices_as_sent(event):
+     djmail.outbox = []

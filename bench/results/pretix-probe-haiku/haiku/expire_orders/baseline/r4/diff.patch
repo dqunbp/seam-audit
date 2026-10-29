@@ -1,0 +1,159 @@
+diff --git a/src/pretix/base/services/orders.py b/src/pretix/base/services/orders.py
+index dc949fe..b37b747 100644
+--- a/src/pretix/base/services/orders.py
++++ b/src/pretix/base/services/orders.py
+@@ -1596,6 +1596,37 @@ def send_download_reminders(sender, **kwargs):
+                                 )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def expire_orders(sender, **kwargs):
++    # Same conditions as the auto-expire check in send_expiry_warnings: orders that are valid while pending,
++    # awaiting approval or carrying a cancellation fee are not expired automatically.
++    qs = Order.objects.filter(
++        expires__lt=now(), status=Order.STATUS_PENDING, require_approval=False, valid_if_pending=False,
++    ).select_related('event').order_by('event_id')
++
++    event_id = None
++    expire_automatically = False
++    for o in qs:
++        if event_id != o.event_id:
++            expire_automatically = o.event.settings.get('payment_term_expire_automatically', as_type=bool)
++            event_id = o.event_id
++
++        if not expire_automatically:
++            continue
++
++        with transaction.atomic():
++            o = Order.objects.select_for_update(of=OF_SELF).get(pk=o.pk)
++            if (
++                    o.status != Order.STATUS_PENDING or o.expires >= now() or o.valid_if_pending or o.require_approval or
++                    o.fees.filter(fee_type=OrderFee.FEE_TYPE_CANCELLATION).exists()
++            ):
++                # Race condition
++                continue
++
++            mark_order_expired(o)
++
++
+ def notify_user_changed_order(order, user=None, auth=None, invoices=[]):
+     with language(order.locale, order.event.settings.region):
+         email_template = order.event.settings.mail_text_order_changed
+diff --git a/src/tests/base/test_orders.py b/src/tests/base/test_orders.py
+index 018e28e..cfb0758 100644
+--- a/src/tests/base/test_orders.py
++++ b/src/tests/base/test_orders.py
+@@ -55,7 +55,7 @@ from pretix.base.services.invoices import (
+ )
+ from pretix.base.services.orders import (
+     OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,
+-    deny_order, reactivate_order, send_download_reminders,
++    deny_order, expire_orders, reactivate_order, send_download_reminders,
+     send_expiry_warnings,
+ )
+ from pretix.plugins.banktransfer.payment import BankTransfer
+@@ -4449,3 +4449,103 @@ def test_autocreate_medium(event):
+     op = order.positions.first()
+     m = op.linked_media.get()
+     assert m.type == "barcode"
++
++
++def _make_pending_order(event, code, expires=None, status=Order.STATUS_PENDING, **kwargs):
++    return Order.objects.create(
++        code=code, event=event, email='dummy@dummy.test',
++        status=status, locale='en',
++        datetime=now() - timedelta(days=3),
++        expires=expires if expires is not None else now() - timedelta(hours=1),
++        total=Decimal('23.00'),
++        sales_channel=event.organizer.sales_channels.get(identifier="web"),
++        **kwargs
++    )
++
++
++@pytest.mark.django_db
++def test_expire_orders_expires_overdue_pending_order(event):
++    o = _make_pending_order(event, 'OVERDUE')
++    expire_orders(sender=event)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_EXPIRED
++    assert o.all_logentries().filter(action_type='pretix.event.order.expired').exists()
++
++
++@pytest.mark.django_db
++def test_expire_orders_keeps_order_with_future_deadline(event):
++    o = _make_pending_order(event, 'FUTURE', expires=now() + timedelta(days=1))
++    expire_orders(sender=event)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_PENDING
++
++
++@pytest.mark.django_db
++def test_expire_orders_ignores_paid_and_canceled_orders(event):
++    paid = _make_pending_order(event, 'PAID', status=Order.STATUS_PAID)
++    canceled = _make_pending_order(event, 'CANCELED', status=Order.STATUS_CANCELED)
++    expire_orders(sender=event)
++    paid.refresh_from_db()
++    canceled.refresh_from_db()
++    assert paid.status == Order.STATUS_PAID
++    assert canceled.status == Order.STATUS_CANCELED
++
++
++@pytest.mark.django_db
++def test_expire_orders_respects_disabled_setting(event):
++    event.settings.payment_term_expire_automatically = False
++    o = _make_pending_order(event, 'NOAUTO')
++    expire_orders(sender=event)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_PENDING
++
++
++@pytest.mark.django_db
++def test_expire_orders_setting_is_per_event(event):
++    other = Event.objects.create(
++        organizer=event.organizer, name='Other', slug='other', date_from=now(),
++        plugins='pretix.plugins.banktransfer'
++    )
++    other.settings.payment_term_expire_automatically = False
++    o_auto = _make_pending_order(event, 'AUTO')
++    o_manual = _make_pending_order(other, 'MANUAL')
++    expire_orders(sender=event)
++    o_auto.refresh_from_db()
++    o_manual.refresh_from_db()
++    assert o_auto.status == Order.STATUS_EXPIRED
++    assert o_manual.status == Order.STATUS_PENDING
++
++
++@pytest.mark.django_db
++def test_expire_orders_skips_valid_if_pending(event):
++    o = _make_pending_order(event, 'VALIDPENDING', valid_if_pending=True)
++    expire_orders(sender=event)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_PENDING
++
++
++@pytest.mark.django_db
++def test_expire_orders_skips_require_approval(event):
++    o = _make_pending_order(event, 'APPROVAL', require_approval=True)
++    expire_orders(sender=event)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_PENDING
++
++
++@pytest.mark.django_db
++def test_expire_orders_skips_orders_with_cancellation_fee(event):
++    o = _make_pending_order(event, 'CANCELFEE')
++    o.fees.create(fee_type=OrderFee.FEE_TYPE_CANCELLATION, value=Decimal('5.00'))
++    expire_orders(sender=event)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_PENDING
++
++
++@pytest.mark.django_db
++def test_expire_orders_cancels_open_invoice(event):
++    o = _make_pending_order(event, 'INVOICE')
++    i = generate_invoice(o)
++    expire_orders(sender=event)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_EXPIRED
++    assert o.invoices.filter(is_cancellation=True, refers=i).exists()

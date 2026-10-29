@@ -1,0 +1,192 @@
+diff --git a/src/pretix/base/services/orders.py b/src/pretix/base/services/orders.py
+index 0759aa9..804f057 100644
+--- a/src/pretix/base/services/orders.py
++++ b/src/pretix/base/services/orders.py
+@@ -282,6 +282,64 @@ def reactivate_order(order: Order, force: bool=False, user: User=None, auth=None
+             })
+ 
+ 
++def extend_order(order: Order, new_date: datetime, force: bool=False, valid_if_pending: bool=None, user: User=None,
++                 auth=None):
++    """
++    Extends the payment deadline of a pending order to ``new_date``. If the order has already expired, it is
++    set back to pending, which fails if there is not enough quota unless ``force`` is set to ``True``.
++    :param new_date: The new payment deadline, which needs to be in the future
++    :param force: Extend the order even if this leads to an overbooked quota
++    :param valid_if_pending: Whether the order should be treated as confirmed regardless of payment. If ``None``,
++                             the current setting is kept.
++    :param user: The user that performed the change
++    """
++    if new_date < now():
++        raise OrderError(_('The new expiry date needs to be in the future.'))
++
++    with transaction.atomic():
++        order = Order.objects.select_for_update(of=OF_SELF).get(pk=order.pk)
++        if order.status not in (Order.STATUS_PENDING, Order.STATUS_EXPIRED):
++            raise OrderError(_('This action is only allowed for pending orders.'))
++
++        was_expired = order.status == Order.STATUS_EXPIRED
++        if was_expired:
++            is_available = order._is_still_available(now(), count_waitinglist=False, check_voucher_usage=True,
++                                                     check_memberships=True, lock=True, force=force)
++            if is_available is not True:
++                raise OrderError(is_available)
++            order.status = Order.STATUS_PENDING
++
++        order.expires = new_date
++        if valid_if_pending is not None:
++            order.valid_if_pending = valid_if_pending
++        order.save(update_fields=['expires', 'status', 'valid_if_pending'])
++        order.log_action(
++            'pretix.event.order.expirychanged',
++            user=user,
++            auth=auth,
++            data={
++                'expires': order.expires,
++                'valid_if_pending': order.valid_if_pending,
++            }
++        )
++        order.create_transactions()
++
++    if was_expired:
++        order_reactivated.send(order.event, order=order)
++
++        num_invoices = order.invoices.filter(is_cancellation=False).count()
++        if num_invoices > 0 and order.invoices.filter(is_cancellation=True).count() >= num_invoices and invoice_qualified(order):
++            try:
++                generate_invoice(order)
++            except Exception as e:
++                logger.exception("Could not generate invoice.")
++                order.log_action("pretix.event.order.invoice.failed", data={
++                    "exception": str(e)
++                })
++
++    return order
++
++
+ @transaction.atomic
+ def mark_order_refunded(order, user=None, auth=None, api_token=None):
+     oautha = auth.pk if isinstance(auth, OAuthApplication) else None
+diff --git a/src/tests/base/test_orders.py b/src/tests/base/test_orders.py
+index 4e91e26..7eb376b 100644
+--- a/src/tests/base/test_orders.py
++++ b/src/tests/base/test_orders.py
+@@ -55,8 +55,8 @@ from pretix.base.services.invoices import (
+ )
+ from pretix.base.services.orders import (
+     OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,
+-    deny_order, expire_orders, reactivate_order, send_download_reminders,
+-    send_expiry_warnings,
++    deny_order, expire_orders, extend_order, mark_order_expired, reactivate_order,
++    send_download_reminders, send_expiry_warnings,
+ )
+ from pretix.plugins.banktransfer.payment import BankTransfer
+ from pretix.testutils.mock import mocker_context
+@@ -4511,6 +4511,107 @@ def test_issue_when_paid_and_changed(event):
+     assert gc2.value == op2.price
+ 
+ 
++class OrderExtendTest(TestCase):
++    def setUp(self):
++        super().setUp()
++        self.o = Organizer.objects.create(name='Dummy', slug='dummy')
++        with scope(organizer=self.o):
++            self.event = Event.objects.create(organizer=self.o, name='Dummy', slug='dummy', date_from=now(),
++                                              plugins='tests.testdummy')
++            self.order = Order.objects.create(
++                code='FOO', event=self.event, email='dummy@dummy.test',
++                status=Order.STATUS_PENDING, locale='en',
++                datetime=now(), expires=now() + timedelta(days=1),
++                total=Decimal('23.00'),
++                sales_channel=self.event.organizer.sales_channels.get(identifier="web"),
++            )
++            self.ticket = Item.objects.create(event=self.event, name='Early-bird ticket',
++                                              default_price=Decimal('23.00'), admission=True)
++            OrderPosition.objects.create(
++                order=self.order, item=self.ticket, variation=None,
++                price=Decimal("23.00"), attendee_name_parts={'full_name': "Peter"}, positionid=1
++            )
++            self.quota = self.event.quotas.create(name='Test', size=None)
++            self.quota.items.add(self.ticket)
++            generate_invoice(self.order)
++            self.order.create_transactions()
++            djmail.outbox = []
++
++    @classscope(attr='o')
++    def test_extend_pending(self):
++        new_date = now() + timedelta(days=10)
++        extend_order(self.order, new_date=new_date)
++        self.order.refresh_from_db()
++        assert self.order.status == Order.STATUS_PENDING
++        assert self.order.expires == new_date
++        assert self.order.all_logentries().first().action_type == 'pretix.event.order.expirychanged'
++        assert self.order.invoices.count() == 1
++
++    @classscope(attr='o')
++    def test_extend_pending_keeps_valid_if_pending_by_default(self):
++        self.order.valid_if_pending = True
++        self.order.save()
++        extend_order(self.order, new_date=now() + timedelta(days=10))
++        self.order.refresh_from_db()
++        assert self.order.valid_if_pending is True
++
++    @classscope(attr='o')
++    def test_set_valid_if_pending(self):
++        extend_order(self.order, new_date=now() + timedelta(days=10), valid_if_pending=True)
++        self.order.refresh_from_db()
++        assert self.order.valid_if_pending is True
++        extend_order(self.order, new_date=now() + timedelta(days=10), valid_if_pending=False)
++        self.order.refresh_from_db()
++        assert self.order.valid_if_pending is False
++
++    @classscope(attr='o')
++    def test_extend_expired_makes_pending(self):
++        mark_order_expired(self.order)
++        new_date = now() + timedelta(days=10)
++        extend_order(self.order, new_date=new_date)
++        self.order.refresh_from_db()
++        assert self.order.status == Order.STATUS_PENDING
++        assert self.order.expires == new_date
++        assert self.order.all_logentries().first().action_type == 'pretix.event.order.expirychanged'
++        assert self.order.invoices.count() == 3
++
++    @classscope(attr='o')
++    def test_extend_expired_sold_out(self):
++        mark_order_expired(self.order)
++        self.quota.size = 0
++        self.quota.save()
++        with pytest.raises(OrderError):
++            extend_order(self.order, new_date=now() + timedelta(days=10))
++        self.order.refresh_from_db()
++        assert self.order.status == Order.STATUS_EXPIRED
++
++    @classscope(attr='o')
++    def test_extend_expired_sold_out_force(self):
++        mark_order_expired(self.order)
++        self.quota.size = 0
++        self.quota.save()
++        extend_order(self.order, new_date=now() + timedelta(days=10), force=True)
++        self.order.refresh_from_db()
++        assert self.order.status == Order.STATUS_PENDING
++
++    @classscope(attr='o')
++    def test_extend_paid_fails(self):
++        self.order.status = Order.STATUS_PAID
++        self.order.save()
++        with pytest.raises(OrderError):
++            extend_order(self.order, new_date=now() + timedelta(days=10))
++        self.order.refresh_from_db()
++        assert self.order.status == Order.STATUS_PAID
++
++    @classscope(attr='o')
++    def test_extend_to_past_date_fails(self):
++        old_expires = self.order.expires
++        with pytest.raises(OrderError):
++            extend_order(self.order, new_date=now() - timedelta(days=1))
++        self.order.refresh_from_db()
++        assert self.order.expires == old_expires
++
++
+ class OrderReactivateTest(TestCase):
+     def setUp(self):
+         super().setUp()

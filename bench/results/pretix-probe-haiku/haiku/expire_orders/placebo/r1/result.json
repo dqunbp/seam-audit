@@ -1,0 +1,57 @@
+{
+  "run_id": "haiku/expire_orders/placebo/r1",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "expire_orders",
+  "condition": "placebo",
+  "rep": 1,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 90.3,
+  "cost_usd": 0.018772000000000004,
+  "num_turns": 22,
+  "duration_s": 87.6,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 5,
+    "Read": 6,
+    "Glob": 1,
+    "Edit": 3,
+    "Bash": 4
+  },
+  "files_read": [
+    "src/pretix/base/models/orders.py",
+    "src/pretix/base/services/orders.py",
+    "src/pretix/base/settings.py",
+    "src/tests/base/test_orders.py"
+  ],
+  "skills_invoked": [
+    "careful-dev"
+  ],
+  "bash_commands": [
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/placebo/r1/repo/src && python -m pytest tests/base/test_orders.py -k \"OrderExpiryTests or PaymentReminderTests\" -q -p no:cacheprovider 2>&1 | tail -30",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/placebo/r1/repo && (python -m flake8 src/pretix/base/services/orders.py src/tests/base/test_orders.py 2>&1 | tail -20; echo \"flake8 exit: $?\") && git status --short",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/placebo/r1/repo && python -m flake8 src/pretix/base/services/orders.py src/tests/base/test_orders.py; echo \"flake8 exit: $?\"; git status --short",
+    "python -m flake8 /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/placebo/r1/repo/src/pretix/base/services/orders.py /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/placebo/r1/repo/src/tests/base/test_orders.py; echo \"flake8 exit: $?\""
+  ],
+  "seam_table": false,
+  "output_chars": 4797,
+  "hidden": {
+    "base.test_orders::test_expiring": true,
+    "base.test_orders::test_expiring_paid_invoice": true,
+    "base.test_orders::test_expire_twice": true,
+    "base.test_orders::test_expire_skipped_if_canceled_with_fee": true,
+    "base.test_orders::test_expiring_auto_disabled": true,
+    "base.test_orders::test_expiring_auto_delayed": false,
+    "base.test_orders::test_expiring_auto_delayed_weekdays": true,
+    "base.test_orders::test_do_not_expire_if_approval_pending": true
+  },
+  "hidden_passed": 7,
+  "hidden_total": 8,
+  "visible_green": true,
+  "visible_passed": 430,
+  "visible_total": 430,
+  "diff_lines": 133
+}

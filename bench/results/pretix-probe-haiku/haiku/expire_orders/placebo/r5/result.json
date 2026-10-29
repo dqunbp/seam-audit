@@ -1,0 +1,62 @@
+{
+  "run_id": "haiku/expire_orders/placebo/r5",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "expire_orders",
+  "condition": "placebo",
+  "rep": 5,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 174.6,
+  "cost_usd": 0.023260620000000006,
+  "num_turns": 25,
+  "duration_s": 172.6,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 3,
+    "Read": 3,
+    "Bash": 12,
+    "Edit": 4
+  },
+  "files_read": [
+    "src/pretix/base/services/orders.py",
+    "src/tests/base/test_orders.py"
+  ],
+  "skills_invoked": [
+    "careful-dev"
+  ],
+  "bash_commands": [
+    "git status --short | head; git log --oneline -3; git log -S\"expire_orders\" --oneline | head -5; grep -rn \"payment_term_expire_automatically\\|def minimum_interval\" src/pretix --include=*.py | grep -v \"/tests/\" | head -20; grep -rn \"expire_orders\" src/ | head",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/placebo/r5/repo/src && sed -n 925,960p pretix/base/models/orders.py; sed -n 1070,1085p pretix/base/settings.py; grep -n \"def mark_order_expired\\|expire\" pretix/base/models/orders.py | head -40",
+    "sed -n 998,1026p pretix/base/models/orders.py; sed -n 1,80p pretix/helpers/periodic.py | sed -n 25,80p; grep -n \"send_expiry_warnings\\|mark_order_expired\\|expire\" tests/base/test_orders.py | head -30; grep -rln \"send_expiry_warnings\" tests | head",
+    "sed -n 20,80p tests/base/test_orders.py; sed -n 310,345p tests/base/test_orders.py; grep -n \"^def \\|^@pytest\" tests/base/test_orders.py | head -20",
+    "wc -l tests/base/test_orders.py && tail -5 tests/base/test_orders.py && grep -n \"def test_send_expiry\\|def test_expiry_warn\\|def test_.*expir\" tests/base/test_orders.py | tail -5",
+    "cat >> tests/base/test_orders.py <<'EOF'\n\n\ndef _make_pending_order(event, expires, **kwargs):\n    return Order.objects.create(\n        code='FOO', event=event, email='dummy@dummy.test',\n        status=Order.STATUS_PENDING,\n        datetime=now() - timedelta(days=10), expires=expires,\n        total=Decimal('23.00'), locale='en',\n        sales_channel=event.organizer.sales_channels.get(identifier=\"web\"),\n        **kwargs\n    )\n\n\n@pytest.mark.django_db\ndef test_expire_orders_expires_overdue_pending_order(event):\n    o = _make_pending_order(event, now() - timedelta(days=1))\n    expire_orders(sender=None)\n    o.refresh_from_db()\n    assert o.status == Order.STATUS_EXPIRED\n    assert o.all_logentries().filter(action_type='pretix.event.order.expired').exists()\n\n\n@pytest.mark.django_db\ndef test_expire_orders_keeps_order_with_future_deadline(event):\n    o = _make_pending_order(event, now() + timedelta(days=1))\n    expire_orders(sender=None)\n    o.refresh_from_db()\n    assert o.status == Order.STATUS_PENDING\n\n\n@pytest.mark.django_db\ndef test_expire_orders_ignores_non_pending_orders(event):\n    paid = _make_pending_order(event, now() - timedelta(days=1))\n    paid.status = Order.STATUS_PAID\n    paid.save()\n    expired = _make_pending_order(event, now() - timedelta(days=2), code='BAR')\n    expired.status = Order.STATUS_EXPIRED\n    expired.save()\n    expire_orders(sender=None)\n    paid.refresh_from_db()\n    expired.refresh_from_db()\n    assert paid.status == Order.STATUS_PAID\n    assert expired.status == Order.STATUS_EXPIRED\n\n\n@pytest.mark.django_db\ndef test_expire_orders_ignores_orders_requiring_approval(event):\n    o = _make_pending_order(event, now() - timedelta(days=1), require_approval=True)\n    expire_orders(sender=None)\n    o.refresh_from_db()\n    assert o.status == Order.STATUS_PENDING\n\n\n@pytest.mark.django_db\ndef test_expire_orders_ignores_valid_if_pending_orders(event):\n    o = _make_pending_order(event, now() - timedelta(days=1), valid_if_pending=True)\n    expire_orders(sender=None)\n    o.refresh_from_db()\n    assert o.status == Order.STATUS_PENDING\n\n\n@pytest.mark.django_db\ndef test_expire_orders_respects_disabled_automatic_expiry(event):\n    event.settings.payment_term_expire_automatically = False\n    o = _make_pending_order(event, now() - timedelta(days=1))\n    expire_orders(sender=None)\n    o.refresh_from_db()\n    assert o.status == Order.STATUS_PENDING\n\n\n@pytest.mark.django_db\ndef test_expire_orders_respects_payment_term_expire_delay(event):\n    event.settings.payment_term_expire_delay_days = 5\n    recent = _make_pending_order(event, now() - timedelta(days=1))\n    overdue = _make_pending_order(event, now() - timedelta(days=6), code='BAR')\n    expire_orders(sender=None)\n    recent.refresh_from_db()\n    overdue.refresh_from_db()\n    assert recent.status == Order.STATUS_PENDING\n    assert overdue.status == Order.STATUS_EXPIRED\n\n\n@pytest.mark.django_db\ndef test_expire_orders_only_affects_events_with_automatic_expiry(event):\n    other_event = Event.objects.create(\n        organizer=event.organizer, name='Other', slug='other',\n        date_from=now(), plugins='pretix.plugins.banktransfer',\n    )\n    other_event.settings.payment_term_expire_automatically = False\n    o1 = _make_pending_order(event, now() - timedelta(days=1))\n    o2 = _make_pending_order(other_event, now() - timedelta(days=1), code='BAR')\n    expire_orders(sender=None)\n    o1.refresh_from_db()\n    o2.refresh_from_db()\n    assert o1.status == Order.STATUS_EXPIRED\n    assert o2.status == Order.STATUS_PENDING\nEOF\nsed -i 's/^    send_expiry_warnings,$/    expire_orders, send_expiry_warnings,/' tests/base/test_orders.py && sed -n 58,62p tests/base/test_orders.py",
+    "timeout 580 python -m pytest tests/base/test_orders.py -k \"expire_orders or expiry\" -q -p no:cacheprovider 2>&1 | tail -30",
+    "timeout 580 python -m pytest tests/base/test_orders.py -k \"expire_orders or expiry\" -q -p no:cacheprovider 2>&1 | grep -E \"^E |Error|passed|failed|^FAILED\" | head -40",
+    "(python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -5; echo \"flake8 exit: $?\"); timeout 580 python -m pytest tests/base/test_orders.py -q -p no:cacheprovider 2>&1 | tail -4",
+    "timeout 580 python -m pytest tests/base/test_orders.py -q -p no:cacheprovider 2>&1 | tail -4",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit: $?\"; cd .. && git status --short",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit: $?\""
+  ],
+  "seam_table": false,
+  "output_chars": 3180,
+  "hidden": {
+    "base.test_orders::test_expiring": true,
+    "base.test_orders::test_expiring_paid_invoice": true,
+    "base.test_orders::test_expire_twice": true,
+    "base.test_orders::test_expire_skipped_if_canceled_with_fee": false,
+    "base.test_orders::test_expiring_auto_disabled": true,
+    "base.test_orders::test_expiring_auto_delayed": true,
+    "base.test_orders::test_expiring_auto_delayed_weekdays": true,
+    "base.test_orders::test_do_not_expire_if_approval_pending": true
+  },
+  "hidden_passed": 7,
+  "hidden_total": 8,
+  "visible_green": true,
+  "visible_passed": 430,
+  "visible_total": 430,
+  "diff_lines": 123
+}

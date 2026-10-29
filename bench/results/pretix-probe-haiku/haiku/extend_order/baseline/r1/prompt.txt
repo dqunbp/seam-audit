@@ -1,0 +1,5 @@
+This is pretix, an event ticketing system (Django). Extending the payment deadline of an order is broken: the service function `extend_order` is missing from `src/pretix/base/services/orders.py`, but the control panel (`OrderExtend` in `src/pretix/control/views/orders.py`) and the REST API (`POST /api/v1/organizers/(organizer)/events/(event)/orders/(code)/extend/`, documented in `doc/api/resources/orders.rst`) still call it.
+
+Implement `extend_order(order, new_date, force=False, valid_if_pending=None, user=None, auth=None)` in `src/pretix/base/services/orders.py`. It moves the payment deadline of a pending order to `new_date`. An order that has already expired can be extended too, which makes it pending again. `force` and `valid_if_pending` mean what the callers and the API documentation say they mean.
+
+Add tests for it. The development environment is installed: run tests from `src/` with `python -m pytest <test files>` (the full suite is very slow, so run the relevant test files).
