@@ -42,6 +42,31 @@
           "test_expiring_auto_delayed_weekdays", "test_do_not_expire_if_approval_pending"
         ]
       }
+    },
+    "send_download_reminders": {
+      "function": "send_download_reminders",
+      "hidden_count": 0,
+      "remove_tests": {
+        "src/tests/base/test_orders.py": ["DownloadReminderTests"]
+      }
+    },
+    "send_expiry_warnings": {
+      "function": "send_expiry_warnings",
+      "hidden_count": 0,
+      "remove_tests": {
+        "src/tests/base/test_orders.py": ["PaymentReminderTests"]
+      }
+    },
+    "cancel_order": {
+      "function": "_cancel_order",
+      "hidden_count": 0,
+      "remove_tests": {
+        "src/tests/base/test_orders.py": [
+          "OrderCancelTests", "OrderChangeManagerTests.test_clear_out_order",
+          "OrderChangeManagerTests.test_clear_out_order_change_secrets",
+          "OrderChangeManagerTests.test_cancel_order_membership"
+        ]
+      }
     }
   }
 }

@@ -18,11 +18,12 @@ def main():
     parser.add_argument("--suite", default="basic")
     parser.add_argument("--venv", type=Path, required=True)
     parser.add_argument("--workdir", type=Path, required=True)
+    parser.add_argument("--tasks", default=None, help="comma-separated; default: all tasks of the suite")
     args = parser.parse_args()
     suite = suite_dir(args.suite)
     env = agent_env(Path.home(), args.venv / "bin")
     ok = True
-    for task in suite_tasks(suite):
+    for task in args.tasks.split(",") if args.tasks else suite_tasks(suite):
         for variant in ("untouched", "reference"):
             dest = args.workdir / task / variant
             shutil.rmtree(dest, ignore_errors=True)
