@@ -9,8 +9,16 @@ from pathlib import Path
 
 BENCH = Path(__file__).resolve().parent
 ROOT = BENCH.parent
-FIXTURE = BENCH / "fixture"
+SUITES = BENCH / "suites"
 TASKS = ["upscale", "video_webhook", "free_quota"]
+
+
+def suite_dir(name: str) -> Path:
+    """A suite holds fixture/, tasks/, hidden/ and reference/."""
+    path = SUITES / name
+    if not (path / "fixture").is_dir():
+        raise SystemExit(f"unknown suite {name!r} (no {path}/fixture)")
+    return path
 
 SKILLS = {
     "seam-audit": ROOT / "SKILL.md",
@@ -43,10 +51,10 @@ def _git(repo: Path, *args: str) -> str:
     ).stdout
 
 
-def prepare_repo(dest: Path, condition: str) -> Path:
-    """Copy the fixture to dest/repo as a fresh git repo and install the condition's skill."""
+def prepare_repo(dest: Path, condition: str, suite: Path) -> Path:
+    """Copy the suite's fixture to dest/repo as a fresh git repo and install the condition's skill."""
     repo = dest / "repo"
-    shutil.copytree(FIXTURE, repo, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
+    shutil.copytree(suite / "fixture", repo, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
     _git(repo, "init", "-q")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "pixforge 0.7.0")
@@ -59,8 +67,8 @@ def prepare_repo(dest: Path, condition: str) -> Path:
     return repo
 
 
-def task_prompt(task: str, condition: str) -> str:
-    prompt = (BENCH / "tasks" / task / "prompt.md").read_text().strip()
+def task_prompt(task: str, condition: str, suite: Path) -> str:
+    prompt = (suite / "tasks" / task / "prompt.md").read_text().strip()
     _, suffix = CONDITIONS[condition]
     return f"{prompt}\n\n{suffix}" if suffix else prompt
 
@@ -121,20 +129,20 @@ def _pytest(repo: Path, target: str, junit: Path, env: dict) -> tuple[int, str]:
         return -1, "timeout"
 
 
-def install_hidden_tests(repo: Path, task: str) -> None:
+def install_hidden_tests(repo: Path, task: str, suite: Path) -> None:
     hidden = repo / "tests_hidden"
     if hidden.exists():
         shutil.rmtree(hidden)
     hidden.mkdir()
     (hidden / "__init__.py").write_text("")
-    shutil.copy(BENCH / "hidden" / "conftest.py", hidden / "conftest.py")
-    for test in (BENCH / "hidden" / task).glob("test_*.py"):
+    shutil.copy(suite / "hidden" / "conftest.py", hidden / "conftest.py")
+    for test in (suite / "hidden" / task).glob("test_*.py"):
         shutil.copy(test, hidden / test.name)
-    shutil.copytree(FIXTURE / "pixforge" / "migrations", hidden / "orig_migrations")
+    shutil.copytree(suite / "fixture" / "pixforge" / "migrations", hidden / "orig_migrations")
 
 
-def grade(repo: Path, task: str, out_dir: Path, env: dict) -> dict:
-    install_hidden_tests(repo, task)
+def grade(repo: Path, task: str, out_dir: Path, env: dict, suite: Path) -> dict:
+    install_hidden_tests(repo, task, suite)
     hidden_rc, hidden_log = _pytest(repo, "tests_hidden", out_dir / "hidden.xml", env)
     shutil.rmtree(repo / "tests_hidden")
     visible_rc, visible_log = _pytest(repo, "tests", out_dir / "visible.xml", env)

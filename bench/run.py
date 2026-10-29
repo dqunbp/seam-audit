@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the benchmark: models × tasks × conditions × repetitions.
 
-    python3 bench/run.py --models haiku --reps 3 --workers 4 \
+    python3 bench/run.py --suite basic --models haiku --reps 3 --workers 4 \
         --venv /path/to/venv-with-pytest --workdir /tmp/seam-runs --out bench/results/pilot-haiku
 
 Agent repos live under --workdir (keep it outside this repository so agents
@@ -16,7 +16,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from harness import CONDITIONS, TASKS, agent_env, grade, prepare_repo, run_agent, task_prompt, transcript_metrics
+from harness import CONDITIONS, TASKS, agent_env, grade, prepare_repo, run_agent, suite_dir, task_prompt, transcript_metrics
 
 
 def one_run(model, task, condition, rep, args) -> dict:
@@ -32,24 +32,26 @@ def one_run(model, task, condition, rep, args) -> dict:
     home.mkdir()
     env = agent_env(home, args.venv / "bin")
 
-    repo = prepare_repo(work, condition)
-    prompt = task_prompt(task, condition)
+    suite = suite_dir(args.suite)
+    repo = prepare_repo(work, condition, suite)
+    prompt = task_prompt(task, condition, suite)
     (out / "prompt.txt").write_text(prompt)
     started = time.time()
     rc = run_agent(repo, prompt, model, out / "transcript.jsonl", env,
                    effort=args.effort, budget_usd=args.budget, timeout_s=args.timeout)
     result = {
-        "run_id": run_id, "model": model, "task": task, "condition": condition, "rep": rep,
+        "run_id": run_id, "suite": args.suite, "model": model, "task": task, "condition": condition, "rep": rep,
         "effort": args.effort, "exit_code": rc, "wall_s": round(time.time() - started, 1),
     }
     result.update(transcript_metrics(out / "transcript.jsonl", repo))
-    result.update(grade(repo, task, out, env))
+    result.update(grade(repo, task, out, env, suite))
     (out / "result.json").write_text(json.dumps(result, indent=2))
     return result
 
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--suite", default="basic", help="directory under bench/suites/")
     parser.add_argument("--models", default="haiku")
     parser.add_argument("--tasks", default=",".join(TASKS))
     parser.add_argument("--conditions", default=",".join(CONDITIONS))

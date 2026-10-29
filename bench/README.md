@@ -5,7 +5,9 @@ or just *any* extra instruction?
 
 ## Design
 
-**Fixture.** `fixture/` is a small but realistic backend ("pixforge": credits, jobs,
+**Suites.** Each suite under `suites/` has `fixture/`, `tasks/`, `hidden/` and `reference/`.
+
+**Fixture.** `suites/basic/fixture/` is a small but realistic backend ("pixforge": credits, jobs,
 quotas, i18n, inbound webhooks, a vendored provider SDK with its API doc). It has the
 kind of seams `SKILL.md` talks about: a canonical charge/refund path with idempotency-key
 conventions, a job state machine with conditional transitions, a provider SDK that returns
@@ -13,7 +15,7 @@ conventions, a job state machine with conditional transitions, a provider SDK th
 webhooks, an injected clock, a migrations directory that prod has already applied, and an
 i18n layer with a locale-parity test.
 
-**Tasks** (`tasks/*/prompt.md`) are ordinary feature tickets; they never mention seams:
+**Tasks** (`suites/*/tasks/*/prompt.md`) are ordinary feature tickets; they never mention seams:
 
 | task | what the agent builds | traps (hidden tests) |
 |---|---|---|
@@ -26,6 +28,13 @@ i18n layer with a locale-parity test.
 `validate.py` checks the benchmark itself: the reference solutions in `reference/` pass
 100%, and the untouched fixture passes only the 1–2 "don't break things" guards.
 The visible suite (`tests/`, including the agent's own tests) is also run.
+
+**Hard suite** (`suites/hard/`): the same codebase and tasks with the explanatory
+comments stripped (conventions now live only in code, not docstrings) and subtler seams:
+files live in our bucket under storage keys while Lumen output URLs expire after 24h
+(stated only in the provider doc); webhook events can arrive before `start_video` records the
+provider job id, so they must not be acknowledged; the upscale price is missing from the
+price table, so it has to be added rather than hardcoded for pro discounts to apply.
 
 **Conditions** (`harness.py`):
 
@@ -50,8 +59,8 @@ invocation, whether a seam table appeared, diff size.
 
 ```sh
 python3 -m venv /tmp/bench-venv && /tmp/bench-venv/bin/pip install pytest
-python3 bench/validate.py --venv /tmp/bench-venv --workdir /tmp/seam-validate
-python3 bench/run.py --models haiku --reps 5 --workers 6 \
+python3 bench/validate.py --suite basic --venv /tmp/bench-venv --workdir /tmp/seam-validate
+python3 bench/run.py --suite basic --models haiku --reps 5 --workers 6 \
     --venv /tmp/bench-venv --workdir /tmp/seam-runs --out bench/results/pilot-haiku
 python3 bench/report.py bench/results/pilot-haiku > bench/results/pilot-haiku/REPORT.md
 ```
