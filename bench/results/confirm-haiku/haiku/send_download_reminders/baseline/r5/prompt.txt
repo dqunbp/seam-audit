@@ -1,0 +1,5 @@
+This is pretix, an event ticketing system (Django). Customers are supposed to get a reminder e-mail with their tickets a configurable number of days before the event (the event setting `mail_days_download_reminder`, part of the e-mail settings in the control panel). The periodic job that sends these reminders is missing, so nobody gets them.
+
+Implement it as `send_download_reminders(sender, **kwargs)` in `src/pretix/base/services/orders.py`, run by pretix's periodic task mechanism in the same way as the other periodic jobs.
+
+Add tests for it. The development environment is installed: run tests from `src/` with `python -m pytest <test files>` (the full suite is very slow, so run the relevant test files).

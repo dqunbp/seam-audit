@@ -1,0 +1,73 @@
+{
+  "run_id": "haiku/send_download_reminders/placebo/r5",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "send_download_reminders",
+  "condition": "placebo",
+  "rep": 5,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 188.6,
+  "cost_usd": 0.02556624,
+  "num_turns": 29,
+  "duration_s": 186.5,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 2,
+    "Bash": 12,
+    "Read": 9,
+    "Edit": 3
+  },
+  "files_read": [
+    "src/pretix/base/models/orders.py",
+    "src/pretix/base/services/orders.py",
+    "src/pretix/base/settings.py",
+    "src/pretix/base/timeline.py",
+    "src/tests/base/test_orders.py"
+  ],
+  "skills_invoked": [
+    "careful-dev"
+  ],
+  "bash_commands": [
+    "git status --short && git log --oneline -3 && ls src/pretix/base/services/ | head -50",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_download_reminders/placebo/r5/repo/src && sed -n 290,300p pretix/base/models/orders.py && echo ---EVENT && sed -n 728,745p pretix/base/models/event.py && echo ---SENDMAIL && sed -n 1165,1200p pretix/base/models/orders.py && echo ---TESTS && grep -rln \"download_reminder\\|expiry_reminder_sent\\|send_expiry_warnings\" tests | head -20 && echo ---RESTTEXT && sed -n 2996,3006p pretix/base/settings.py && echo ---MINTERVAL && grep -n \"def minimum_interval\" -A12 pretix/helpers/periodic.py pretix/base/services/*.py | head -30",
+    "grep -n \"download_reminder\\|expiry_reminder\\|send_expiry\" tests/base/test_orders.py | head -20; echo ---ATTENDEE; grep -n \"def _order_placed_email_attendee\" -A25 pretix/base/services/orders.py | head -40; echo ---IMPORTS; sed -n 20,110p pretix/base/services/orders.py | grep -n \"import\" | head -60",
+    "sed -n 880,930p tests/base/test_orders.py; echo ---; sed -n 2910,2925p pretix/base/models/orders.py; echo ---; sed -n 33,36p pretix/base/services/orders.py; echo ---; grep -n \"^class \\|^from\\|^import\" tests/base/test_orders.py | head -60",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k DownloadReminderTests tests/base/test_runperiodic.py -q -p no:cacheprovider 2>&1 | tail -40",
+    "timeout 900 python -m pytest tests/base/test_runperiodic.py -q -p no:cacheprovider 2>&1 | tail -15; timeout 900 python -m pytest tests/base/test_orders.py -k PaymentReminderTests -q -p no:cacheprovider 2>&1 | tail -5; python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -5; python -m isort -c pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -3",
+    "timeout 900 python -m pytest tests/base/test_runperiodic.py -q -p no:cacheprovider",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k PaymentReminderTests -q -p no:cacheprovider",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py",
+    "timeout 1500 python -m pytest tests/base/test_orders.py -q -p no:cacheprovider",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_download_reminders/placebo/r5/repo && git status --short && git diff --stat",
+    "git -C /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_download_reminders/placebo/r5/repo status --short"
+  ],
+  "seam_table": false,
+  "output_chars": 5553,
+  "hidden": {
+    "base.test_orders.DownloadReminderTests::test_disabled": true,
+    "base.test_orders.DownloadReminderTests::test_downloads_all_allowed_by_plugin": true,
+    "base.test_orders.DownloadReminderTests::test_downloads_disabled": true,
+    "base.test_orders.DownloadReminderTests::test_downloads_disabled_by_plugin": false,
+    "base.test_orders.DownloadReminderTests::test_downloads_disabled_per_product": false,
+    "base.test_orders.DownloadReminderTests::test_downloads_partially_disabled_by_plugin": true,
+    "base.test_orders.DownloadReminderTests::test_not_sent_after_reminder_date": false,
+    "base.test_orders.DownloadReminderTests::test_not_sent_for_disabled_sales_channel": false,
+    "base.test_orders.DownloadReminderTests::test_not_sent_too_early": true,
+    "base.test_orders.DownloadReminderTests::test_not_sent_too_soon_after_purchase": false,
+    "base.test_orders.DownloadReminderTests::test_send_not_to_attendees_with_same_address": true,
+    "base.test_orders.DownloadReminderTests::test_send_to_attendees": true,
+    "base.test_orders.DownloadReminderTests::test_send_to_attendees_subevent_future": false,
+    "base.test_orders.DownloadReminderTests::test_send_to_attendees_subevent_past": true,
+    "base.test_orders.DownloadReminderTests::test_sent_once": true,
+    "base.test_orders.DownloadReminderTests::test_sent_paid_only": true
+  },
+  "hidden_passed": 10,
+  "hidden_total": 16,
+  "visible_green": true,
+  "visible_passed": 422,
+  "visible_total": 422,
+  "diff_lines": 162
+}

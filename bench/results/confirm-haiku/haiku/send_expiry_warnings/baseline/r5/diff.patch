@@ -1,0 +1,235 @@
+diff --git a/src/pretix/base/services/orders.py b/src/pretix/base/services/orders.py
+index 4672b24..0c861e7 100644
+--- a/src/pretix/base/services/orders.py
++++ b/src/pretix/base/services/orders.py
+@@ -46,6 +46,7 @@ from typing import List, Optional
+ 
+ from celery.exceptions import MaxRetriesExceededError
+ from django.conf import settings
++from django.contrib.contenttypes.models import ContentType
+ from django.core.cache import cache
+ from django.core.exceptions import ValidationError
+ from django.db import models, transaction
+@@ -1561,6 +1562,62 @@ def send_download_reminders(sender, **kwargs):
+                                 )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def send_expiry_warnings(sender, **kwargs):
++    """
++    Sends a warning to customers with an unpaid order shortly before their payment deadline. How many days
++    before the deadline the mail is sent is configured per event, a value of 0 disables the mail. Every
++    order receives the warning at most once.
++    """
++    qs = Order.objects.filter(
++        status=Order.STATUS_PENDING,
++        expires__gt=now(),
++        valid_if_pending=False,
++        require_approval=False,
++    ).exclude(
++        Exists(
++            OrderFee.objects.filter(order_id=OuterRef('pk'), fee_type=OrderFee.FEE_TYPE_CANCELLATION)
++        )
++    ).annotate(
++        warning_sent=Exists(
++            LogEntry.objects.filter(
++                content_type=ContentType.objects.get_for_model(Order),
++                object_id=OuterRef('pk'),
++                action_type='pretix.event.order.email.expire_warning_sent',
++            )
++        )
++    ).filter(
++        warning_sent=False,
++    ).select_related('event').order_by('event_id')
++
++    event_id = None
++    days = None
++    for o in qs:
++        if o.event_id != event_id:
++            days = o.event.settings.get('mail_days_order_expire_warning', as_type=int)
++            event_id = o.event_id
++        if not days or now() < o.payment_term_expire_date - timedelta(days=days):
++            continue
++
++        with transaction.atomic():
++            o = Order.objects.select_for_update(of=OF_SELF).get(pk=o.pk)
++            if o.status != Order.STATUS_PENDING or o.all_logentries().filter(
++                action_type='pretix.event.order.email.expire_warning_sent',
++            ).exists():
++                # Race condition
++                continue
++
++            with language(o.locale, o.event.settings.region):
++                email_template = o.event.settings.mail_text_order_expire_warning
++                email_subject = o.event.settings.mail_subject_order_expire_warning
++                email_context = get_email_context(event=o.event, order=o)
++                o.send_mail(
++                    email_subject, email_template, email_context,
++                    'pretix.event.order.email.expire_warning_sent',
++                )
++
++
+ def notify_user_changed_order(order, user=None, auth=None, invoices=[]):
+     with language(order.locale, order.event.settings.region):
+         email_template = order.event.settings.mail_text_order_changed
+diff --git a/src/tests/base/test_expiry_warnings.py b/src/tests/base/test_expiry_warnings.py
+new file mode 100644
+index 0000000..bb65781
+--- /dev/null
++++ b/src/tests/base/test_expiry_warnings.py
+@@ -0,0 +1,154 @@
++#
++# This file is part of pretix (Community Edition).
++#
++# Copyright (C) 2014-2020  Raphael Michel and contributors
++# Copyright (C) 2020-today pretix GmbH and contributors
++#
++# This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General
++# Public License as published by the Free Software Foundation in version 3 of the License.
++#
++# ADDITIONAL TERMS APPLY: Pursuant to Section 7 of the GNU Affero General Public License, additional terms are
++# applicable granting you additional permissions and placing additional restrictions on your usage of this software.
++# Please refer to the pretix LICENSE file to obtain the full terms applicable to this work. If you did not receive
++# this file, see <https://pretix.eu/about/en/license>.
++#
++# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
++# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public License for more
++# details.
++#
++# You should have received a copy of the GNU Affero General Public License along with this program.  If not, see
++# <https://www.gnu.org/licenses/>.
++#
++from datetime import timedelta
++from decimal import Decimal
++
++import pytest
++from django.core import mail as djmail
++from django.utils.timezone import now
++from django_scopes import scope
++
++from pretix.base.models import Event, Order, Organizer
++from pretix.base.services.orders import send_expiry_warnings
++from pretix.base.signals import periodic_task
++
++
++@pytest.fixture
++def event():
++    o = Organizer.objects.create(name='Dummy', slug='dummy', plugins='pretix.plugins.banktransfer')
++    event = Event.objects.create(
++        organizer=o, name='Dummy', slug='dummy',
++        date_from=now() + timedelta(days=30),
++        plugins='pretix.plugins.banktransfer'
++    )
++    with scope(organizer=o):
++        event.settings.mail_days_order_expire_warning = 3
++        djmail.outbox = []
++        yield event
++
++
++def _create_order(event, expires, status=Order.STATUS_PENDING, **kwargs):
++    return Order.objects.create(
++        code='FOO%d' % Order.objects.count(), event=event, email='dummy@dummy.test',
++        status=status, locale='en',
++        datetime=now() - timedelta(days=1),
++        expires=expires,
++        total=Decimal('46.00'),
++        sales_channel=event.organizer.sales_channels.get(identifier="web"),
++        **kwargs
++    )
++
++
++@pytest.mark.django_db
++def test_sent_within_window(event):
++    o = _create_order(event, expires=now() + timedelta(days=2))
++    send_expiry_warnings(sender=None)
++    assert len(djmail.outbox) == 1
++    assert djmail.outbox[0].to == ['dummy@dummy.test']
++    assert o.all_logentries().filter(action_type='pretix.event.order.email.expire_warning_sent').exists()
++
++
++@pytest.mark.django_db
++def test_sent_only_once(event):
++    _create_order(event, expires=now() + timedelta(days=2))
++    send_expiry_warnings(sender=None)
++    send_expiry_warnings(sender=None)
++    send_expiry_warnings(sender=None)
++    assert len(djmail.outbox) == 1
++
++
++@pytest.mark.django_db
++def test_not_sent_before_window(event):
++    _create_order(event, expires=now() + timedelta(days=5))
++    send_expiry_warnings(sender=None)
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_sent_when_deadline_is_delayed_by_payment_term(event):
++    # The payment deadline is expires + payment_term_expire_delay_days, so an order expiring in 2 days with a
++    # 4 day delay has its deadline in about 6 days and is outside the 3 day window.
++    event.settings.payment_term_expire_delay_days = 4
++    _create_order(event, expires=now() + timedelta(days=2))
++    send_expiry_warnings(sender=None)
++    assert len(djmail.outbox) == 0
++
++    event.settings.payment_term_expire_delay_days = 0
++    send_expiry_warnings(sender=None)
++    assert len(djmail.outbox) == 1
++
++
++@pytest.mark.django_db
++def test_disabled_with_zero_days(event):
++    event.settings.mail_days_order_expire_warning = 0
++    _create_order(event, expires=now() + timedelta(days=1))
++    send_expiry_warnings(sender=None)
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_paid_order_not_sent(event):
++    _create_order(event, expires=now() + timedelta(days=2), status=Order.STATUS_PAID)
++    send_expiry_warnings(sender=None)
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_canceled_order_not_sent(event):
++    _create_order(event, expires=now() + timedelta(days=2), status=Order.STATUS_CANCELED)
++    send_expiry_warnings(sender=None)
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_already_expired_order_not_sent(event):
++    _create_order(event, expires=now() - timedelta(hours=1))
++    send_expiry_warnings(sender=None)
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_order_requiring_approval_not_sent(event):
++    _create_order(event, expires=now() + timedelta(days=2), require_approval=True)
++    send_expiry_warnings(sender=None)
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_each_event_uses_its_own_setting(event):
++    event2 = Event.objects.create(
++        organizer=event.organizer, name='Other', slug='other',
++        date_from=now() + timedelta(days=30),
++    )
++    event2.settings.mail_days_order_expire_warning = 0
++    _create_order(event, expires=now() + timedelta(days=2))
++    with scope(organizer=event.organizer):
++        _create_order(event2, expires=now() + timedelta(days=2))
++    send_expiry_warnings(sender=None)
++    assert len(djmail.outbox) == 1
++
++
++@pytest.mark.django_db
++def test_runs_as_periodic_task(event):
++    _create_order(event, expires=now() + timedelta(days=2))
++    periodic_task.send(sender=None)
++    assert len(djmail.outbox) == 1
