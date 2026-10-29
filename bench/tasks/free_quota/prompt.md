@@ -1,0 +1,5 @@
+Product decision: users on the free plan can generate at most 5 images per day. Pro users stay unlimited.
+
+Implement this in `generate_image` (`pixforge/features/generate.py`); keep its signature unchanged. When a user hits the limit, they must get a clear error message in their language that tells them what the limit is. "Per day" means the calendar day in UTC.
+
+Add tests for the new behaviour, and make sure the whole test suite passes before you finish.
