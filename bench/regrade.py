@@ -23,7 +23,7 @@ def main():
     parser.add_argument("runs", type=Path, nargs="+", help="run directories containing result.json and diff.patch")
     args = parser.parse_args()
     env = agent_env(Path.home(), args.venv / "bin")
-    for run in args.runs:
+    for run in (r.resolve() for r in args.runs):
         result = json.loads((run / "result.json").read_text())
         suite = suite_dir(result.get("suite", "basic"))
         dest = args.workdir / result["run_id"]
