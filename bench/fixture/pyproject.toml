@@ -1,8 +1,0 @@
-[project]
-name = "pixforge"
-version = "0.7.0"
-requires-python = ">=3.12"
-
-[tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests"]

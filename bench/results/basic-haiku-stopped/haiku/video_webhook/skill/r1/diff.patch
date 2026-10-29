@@ -1,0 +1,267 @@
+diff --git a/pixforge/webhooks/lumen.py b/pixforge/webhooks/lumen.py
+new file mode 100644
+index 0000000..d53367e
+--- /dev/null
++++ b/pixforge/webhooks/lumen.py
+@@ -0,0 +1,67 @@
++"""Lumen webhook: completion and failure of video jobs started by `start_video`.
++
++Lumen delivers at least once and without ordering (docs/lumen_api.md, Webhooks).
++`video.progress` carries nothing we store, so it is acknowledged and ignored.
++"""
++import json
++import logging
++
++from .. import jobs
++from ..db import transaction
++from ..features.common import fail_job
++from ..jobs import JobStatus
++from .dedup import mark_processed
++from .signing import verify_signature
++
++log = logging.getLogger(__name__)
++
++OUTCOME_EVENTS = ("video.completed", "video.failed")
++
++
++def handle_lumen_webhook(conn, raw_body: bytes, headers: dict, secret: str) -> tuple[int, dict]:
++    """Returns (HTTP status, JSON body). Lumen retries any non-2xx delivery for up to 24 hours."""
++    # HTTP header names are case-insensitive.
++    signature = {name.lower(): value for name, value in headers.items()}.get("lumen-signature")
++    if not verify_signature(secret, raw_body, signature):
++        return 400, {"error": "invalid signature"}
++
++    try:
++        event = json.loads(raw_body)
++        event_id = event["id"]
++        event_type = event["type"]
++        data = event["data"]
++        provider_job_id = data["job_id"]
++        output_url = None
++        if event_type == "video.completed" and data["videos"]:
++            output_url = data["videos"][0]["url"]
++    except (ValueError, KeyError, IndexError, TypeError):
++        log.warning("malformed lumen webhook body")
++        return 400, {"error": "malformed event"}
++
++    if event_type not in OUTCOME_EVENTS:
++        return 200, {"ignored": event_type}
++
++    job = jobs.get_job_by_provider_id(conn, provider_job_id)
++    if job is None or job["kind"] != "video":
++        # Usually the webhook beat the commit that stores provider_job_id. Non-2xx makes Lumen retry.
++        log.warning("lumen event %s for unknown video job %s", event_id, provider_job_id)
++        return 404, {"error": "unknown job"}
++
++    # The dedup marker and the outcome commit together: if either fails, the retry is applied.
++    with transaction(conn):
++        if not mark_processed(conn, "lumen", event_id):
++            return 200, {"duplicate": True}
++        if event_type == "video.failed":
++            moved = fail_job(conn, job["id"], "provider_failed", refund=True)
++        elif output_url:
++            moved = jobs.transition(
++                conn, job["id"], {JobStatus.PROCESSING}, JobStatus.SUCCEEDED, output_url=output_url
++            )
++        else:
++            # Moderation removed the output. Lumen does not bill for it, so the user gets a refund.
++            moved = fail_job(conn, job["id"], "content_filtered", refund=True)
++
++    if not moved:
++        # Already terminal, e.g. the sweeper timed the job out first. Nothing to change.
++        log.warning("lumen event %s: job %s was already terminal", event_id, job["id"])
++    return 200, {"ok": True}
+diff --git a/tests/test_lumen_webhook.py b/tests/test_lumen_webhook.py
+new file mode 100644
+index 0000000..6262bb4
+--- /dev/null
++++ b/tests/test_lumen_webhook.py
+@@ -0,0 +1,188 @@
++import json
++from datetime import timedelta
++
++from pixforge import clock
++from pixforge.billing import get_balance
++from pixforge.features.video import start_video
++from pixforge.jobs import get_job
++from pixforge.sweeper import expire_stale_jobs
++from pixforge.webhooks.lumen import handle_lumen_webhook
++from pixforge.webhooks.signing import sign
++
++SECRET = "whsec_lumen"
++CALLBACK = "https://pixforge.test/hooks/lumen"
++VIDEO_URL = "https://cdn.lumen.test/o/vid_1.mp4"
++
++
++def _start(conn, lumen, user_id, request_id="req-1"):
++    """Start a video job; returns (job_id, provider job id)."""
++    job_id = start_video(conn, lumen, user_id, "a cat surfing", request_id, CALLBACK)["job_id"]
++    return job_id, get_job(conn, job_id)["provider_job_id"]
++
++
++def _event(event_type, provider_job_id, data=None, event_id="evt_1"):
++    if data is None:
++        data = {"job_id": provider_job_id}
++    return {"id": event_id, "type": event_type, "created": 0, "data": data}
++
++
++def _completed(provider_job_id, event_id="evt_1"):
++    return _event(
++        "video.completed",
++        provider_job_id,
++        {
++            "job_id": provider_job_id,
++            "videos": [{"url": VIDEO_URL, "duration_s": 5}],
++            "moderation": None,
++        },
++        event_id,
++    )
++
++
++def _failed(provider_job_id, event_id="evt_1"):
++    return _event(
++        "video.failed",
++        provider_job_id,
++        {"job_id": provider_job_id, "error": {"code": "render_error", "message": "boom"}},
++        event_id,
++    )
++
++
++def _deliver(conn, event: dict, headers_key: str = "Lumen-Signature"):
++    body = json.dumps(event).encode()
++    headers = {headers_key: sign(SECRET, body, int(clock.now().timestamp()))}
++    return handle_lumen_webhook(conn, body, headers, SECRET)
++
++
++def test_completed_marks_job_succeeded_with_url(conn, lumen, user_id):
++    job_id, provider_id = _start(conn, lumen, user_id)
++    status, body = _deliver(conn, _completed(provider_id))
++    assert (status, body) == (200, {"ok": True})
++    job = get_job(conn, job_id)
++    assert job["status"] == "succeeded"
++    assert job["output_url"] == VIDEO_URL
++    assert get_balance(conn, user_id) == 80
++
++
++def test_progress_is_ignored(conn, lumen, user_id):
++    job_id, provider_id = _start(conn, lumen, user_id)
++    event = _event("video.progress", provider_id, {"job_id": provider_id, "progress": 0.4})
++    status, body = _deliver(conn, event)
++    assert (status, body) == (200, {"ignored": "video.progress"})
++    assert get_job(conn, job_id)["status"] == "processing"
++
++
++def test_failed_marks_job_failed_and_refunds(conn, lumen, user_id):
++    job_id, provider_id = _start(conn, lumen, user_id)
++    status, _ = _deliver(conn, _failed(provider_id))
++    assert status == 200
++    job = get_job(conn, job_id)
++    assert job["status"] == "failed"
++    assert job["error"] == "provider_failed"
++    assert get_balance(conn, user_id) == 100
++
++
++def test_moderated_completion_fails_and_refunds(conn, lumen, user_id):
++    job_id, provider_id = _start(conn, lumen, user_id)
++    event = _event(
++        "video.completed",
++        provider_id,
++        {"job_id": provider_id, "videos": [], "moderation": {"reason": "policy"}},
++    )
++    status, _ = _deliver(conn, event)
++    assert status == 200
++    job = get_job(conn, job_id)
++    assert job["status"] == "failed"
++    assert job["error"] == "content_filtered"
++    assert get_balance(conn, user_id) == 100
++
++
++def test_duplicate_failure_refunds_once(conn, lumen, user_id):
++    _, provider_id = _start(conn, lumen, user_id)
++    _deliver(conn, _failed(provider_id))
++    status, body = _deliver(conn, _failed(provider_id))
++    assert (status, body) == (200, {"duplicate": True})
++    assert get_balance(conn, user_id) == 100
++
++
++def test_duplicate_completion_is_applied_once(conn, lumen, user_id):
++    job_id, provider_id = _start(conn, lumen, user_id)
++    _deliver(conn, _completed(provider_id))
++    status, body = _deliver(conn, _completed(provider_id))
++    assert (status, body) == (200, {"duplicate": True})
++    assert get_job(conn, job_id)["status"] == "succeeded"
++
++
++def test_progress_after_completion_does_not_regress_job(conn, lumen, user_id):
++    job_id, provider_id = _start(conn, lumen, user_id)
++    _deliver(conn, _completed(provider_id))
++    progress = _event("video.progress", provider_id, {"job_id": provider_id, "progress": 0.9}, "evt_2")
++    _deliver(conn, progress)
++    job = get_job(conn, job_id)
++    assert job["status"] == "succeeded"
++    assert job["output_url"] == VIDEO_URL
++
++
++def test_failure_after_success_neither_refunds_nor_changes_job(conn, lumen, user_id):
++    job_id, provider_id = _start(conn, lumen, user_id)
++    _deliver(conn, _completed(provider_id))
++    _deliver(conn, _failed(provider_id, event_id="evt_2"))
++    assert get_job(conn, job_id)["status"] == "succeeded"
++    assert get_balance(conn, user_id) == 80
++
++
++def test_completion_after_sweeper_timeout_is_not_applied(conn, lumen, user_id):
++    job_id, provider_id = _start(conn, lumen, user_id)
++    clock.set_now(clock.now() + timedelta(minutes=31))
++    assert expire_stale_jobs(conn) == 1
++    status, _ = _deliver(conn, _completed(provider_id))
++    assert status == 200
++    assert get_job(conn, job_id)["status"] == "timed_out"
++    assert get_balance(conn, user_id) == 100
++
++
++def test_unknown_job_is_retried_and_not_marked_processed(conn, user_id):
++    status, _ = _deliver(conn, _completed("vid_missing", event_id="evt_9"))
++    assert status == 404
++    count = conn.execute("SELECT COUNT(*) FROM processed_events").fetchone()[0]
++    assert count == 0
++
++
++def test_bad_signature_is_rejected(conn, lumen, user_id):
++    job_id, provider_id = _start(conn, lumen, user_id)
++    body = json.dumps(_failed(provider_id)).encode()
++    headers = {"Lumen-Signature": sign("wrong", body, int(clock.now().timestamp()))}
++    status, _ = handle_lumen_webhook(conn, body, headers, SECRET)
++    assert status == 400
++    assert get_job(conn, job_id)["status"] == "processing"
++    assert get_balance(conn, user_id) == 80
++
++
++def test_stale_timestamp_is_rejected(conn, lumen, user_id):
++    job_id, provider_id = _start(conn, lumen, user_id)
++    body = json.dumps(_failed(provider_id)).encode()
++    old = int(clock.now().timestamp()) - 3600
++    status, _ = handle_lumen_webhook(conn, body, {"Lumen-Signature": sign(SECRET, body, old)}, SECRET)
++    assert status == 400
++    assert get_job(conn, job_id)["status"] == "processing"
++
++
++def test_header_names_are_case_insensitive(conn, lumen, user_id):
++    job_id, provider_id = _start(conn, lumen, user_id)
++    status, _ = _deliver(conn, _completed(provider_id), headers_key="lumen-signature")
++    assert status == 200
++    assert get_job(conn, job_id)["status"] == "succeeded"
++
++
++def test_malformed_event_with_valid_signature_is_rejected(conn, lumen, user_id):
++    job_id, provider_id = _start(conn, lumen, user_id)
++    event = {"id": "evt_1", "type": "video.completed", "data": {"job_id": provider_id}}
++    status, _ = _deliver(conn, event)
++    assert status == 400
++    assert get_job(conn, job_id)["status"] == "processing"
++
++
++def test_unknown_event_type_is_ignored(conn, lumen, user_id):
++    _, provider_id = _start(conn, lumen, user_id)
++    status, body = _deliver(conn, _event("video.something_new", provider_id))
++    assert (status, body) == (200, {"ignored": "video.something_new"})

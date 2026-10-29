@@ -30,7 +30,6 @@ CONDITIONS = {
     "baseline": (None, ""),
     "skill": ("seam-audit", "Before you start, use the `seam-audit` skill."),
     "placebo": ("careful-dev", "Before you start, use the `careful-dev` skill."),
-    "skill_auto": ("seam-audit", ""),  # installed but not mentioned: does it trigger by itself?
 }
 
 AGENT_TOOLS = "Read,Edit,Write,Glob,Grep,Bash,Skill"

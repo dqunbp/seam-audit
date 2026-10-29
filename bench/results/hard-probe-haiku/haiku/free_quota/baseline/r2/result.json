@@ -1,0 +1,58 @@
+{
+  "run_id": "haiku/free_quota/baseline/r2",
+  "suite": "hard",
+  "model": "haiku",
+  "task": "free_quota",
+  "condition": "baseline",
+  "rep": 2,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 63.5,
+  "cost_usd": 0.015535780000000003,
+  "num_turns": 18,
+  "duration_s": 59.8,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Bash": 9,
+    "Edit": 7,
+    "Read": 1
+  },
+  "files_read": [
+    "tests/test_generate.py"
+  ],
+  "skills_invoked": [],
+  "bash_commands": [
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-hard-probe/haiku/free_quota/baseline/r2/repo 2>/dev/null || cd /tmp/claude-0/-tmp-claude-0--home-user-seam-audit-4d868dbd-76d3-5c3d-a30c-fa647d6d00e0-scratchpad-runs-hard-probe-haiku-free-quota-baseline-r2-repo/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad; pwd; git status --short | head; git log --oneline | head -5; find . -path ./.git -prune -o -type f -print | grep -v __pycache__ | head -100",
+    "pwd; git status --short | head; git log --oneline | head -5; find . -path ./.git -prune -o -type f -print | grep -v __pycache__ | head -100",
+    "cat pixforge/features/generate.py pixforge/quota.py pixforge/migrations/002_quota.sql pixforge/clock.py pixforge/i18n.py pixforge/users.py",
+    "cat tests/test_generate.py tests/conftest.py tests/fakes.py tests/test_i18n.py pixforge/locales/en.json; cat pixforge/features/common.py pixforge/db.py | head -300",
+    "cat pixforge/features/video.py tests/test_video.py pixforge/locales/ru.json pixforge/pricing.py pixforge/jobs.py; grep -rn \"quota\\|limit\" --include=*.py --include=*.md . | grep -v \"^./pixforge/quota.py\"; cat pyproject.toml",
+    "python3 --version && python3 -m pytest -q 2>&1 | tail -15",
+    "python3 - <<'EOF'\nfrom pathlib import Path\np = Path(\"tests/test_generate.py\")\nsrc = p.read_text(encoding=\"utf-8\")\nold_head = \"\"\"from datetime import datetime, timezone\n\nfrom lumen_sdk import LumenAPIError, LumenRateLimited\n\nfrom pixforge.billing import get_balance\n\"\"\"\nnew_head = \"\"\"from datetime import datetime, timezone\n\nfrom lumen_sdk import LumenAPIError, LumenRateLimited\n\nfrom pixforge import clock, quota\nfrom pixforge.billing import get_balance\n\"\"\"\nassert src.startswith(\"from lumen_sdk import LumenAPIError, LumenRateLimited\\n\")\nsrc = src.replace(\"from lumen_sdk import LumenAPIError, LumenRateLimited\\n\", \"from datetime import datetime, timezone\\n\\nfrom lumen_sdk import LumenAPIError, LumenRateLimited\\n\\nfrom pixforge import clock, quota\\n\", 1)\nsrc = src.replace(\"from pixforge.billing import get_balance\\nfrom pixforge.features.generate import generate_image\\nfrom pixforge.images import list_images\\n\",\n\"from pixforge.billing import get_balance\\nfrom pixforge.features.generate import generate_image\\nfrom pixforge.images import list_images\\n\", 1)\nsrc = src.rstrip(\"\\n\") + '''\n\n\ndef test_free_daily_image_limit(conn, lumen, user_id):\n    for i in range(quota.FREE_DAILY_LIMITS[\"image\"]):\n        assert generate_image(conn, lumen, user_id, \"a cat\", f\"req-{i}\")[\"ok\"]\n\n    blocked = generate_image(conn, lumen, user_id, \"a cat\", \"req-over\", locale=\"en\")\n    assert not blocked[\"ok\"]\n    assert blocked[\"error_code\"] == \"daily_image_limit\"\n    assert blocked[\"job_id\"] is None\n    assert \"5 images\" in blocked[\"message\"]\n    assert len(lumen.calls) == 5\n    assert get_balance(conn, user_id) == 90\n\n\ndef test_daily_image_limit_message_is_localized(conn, lumen, user_id):\n    for i in range(5):\n        generate_image(conn, lumen, user_id, \"a cat\", f\"req-{i}\")\n    blocked = generate_image(conn, lumen, user_id, \"a cat\", \"req-over\", locale=\"ru\")\n    assert blocked[\"message\"] == \"\u0412\u044b \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043b\u0438 \u0434\u043d\u0435\u0432\u043d\u043e\u0439 \u043b\u0438\u043c\u0438\u0442 \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u043e\u0433\u043e \u0442\u0430\u0440\u0438\u0444\u0430: 5 \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0439.\"\n\n\ndef test_pro_has_no_daily_image_limit(conn, lumen, pro_user_id):\n    for i in range(quota.FREE_DAILY_LIMITS[\"image\"] + 3):\n        assert generate_image(conn, lumen, pro_user_id, \"a cat\", f\"req-{i}\")[\"ok\"]\n    assert len(lumen.calls) == 8\n    assert quota.used(conn, pro_user_id, \"image\") == 0\n\n\ndef test_daily_image_limit_resets_at_utc_midnight(conn, lumen, user_id):\n    clock.set_now(datetime(2026, 3, 1, 23, 59, tzinfo=timezone.utc))\n    for i in range(5):\n        assert generate_image(conn, lumen, user_id, \"a cat\", f\"late-{i}\")[\"ok\"]\n    assert not generate_image(conn, lumen, user_id, \"a cat\", \"late-over\")[\"ok\"]\n\n    clock.set_now(datetime(2026, 3, 2, 0, 0, tzinfo=timezone.utc))\n    assert generate_image(conn, lumen, user_id, \"a cat\", \"early-next-day\")[\"ok\"]\n\n\ndef test_retry_of_existing_request_is_not_blocked_by_limit(conn, lumen, user_id):\n    for i in range(4):\n        generate_image(conn, lumen, user_id, \"a cat\", f\"req-{i}\")\n    last = generate_image(conn, lumen, user_id, \"a cat\", \"req-4\")\n    assert last[\"ok\"]\n\n    retry = generate_image(conn, lumen, user_id, \"a cat\", \"req-4\")\n    assert retry == last\n    assert quota.used(conn, user_id, \"image\") == 5\n\n\ndef test_failed_generation_gives_back_the_quota(conn, lumen, user_id):\n    lumen.fail_with = LumenAPIError(500, \"internal\", \"boom\")\n    assert not generate_image(conn, lumen, user_id, \"a cat\", \"req-1\")[\"ok\"]\n    assert quota.used(conn, user_id, \"image\") == 0\n\n    lumen.filter_next = True\n    assert not generate_image(conn, lumen, user_id, \"a cat\", \"req-2\")[\"ok\"]\n    assert quota.used(conn, user_id, \"image\") == 0\n\n\ndef test_insufficient_credits_gives_back_the_quota(conn, lumen):\n    from pixforge.users import create_user\n\n    poor = create_user(conn, \"poor@example.com\", balance=1)\n    assert generate_image(conn, lumen, poor, \"a cat\", \"req-1\")[\"error_code\"] == \"insufficient_credits\"\n    assert quota.used(conn, poor, \"image\") == 0\n'''\np.write_text(src, encoding=\"utf-8\")\nEOF\nhead -12 tests/test_generate.py; python3 -m pytest -q 2>&1 | tail -30",
+    "python3 -m pytest -q 2>&1 | tail -40",
+    "git status --short && git diff --stat"
+  ],
+  "seam_table": false,
+  "output_chars": 2435,
+  "hidden": {
+    "test_sixth_image_of_the_day_is_refused": true,
+    "test_refused_request_is_not_charged_and_not_sent_to_provider": true,
+    "test_limit_message_is_localized_and_names_the_limit": true,
+    "test_pro_users_are_unlimited": true,
+    "test_limit_is_per_user": true,
+    "test_failed_generations_do_not_count": true,
+    "test_insufficient_credits_attempt_does_not_count": true,
+    "test_retried_request_id_counts_once": true,
+    "test_videos_do_not_use_up_the_image_limit": true,
+    "test_limit_resets_at_utc_midnight": true,
+    "test_locale_files_in_sync": true,
+    "test_no_direct_balance_writes": true
+  },
+  "hidden_passed": 12,
+  "hidden_total": 12,
+  "visible_green": true,
+  "visible_passed": 27,
+  "visible_total": 27,
+  "diff_lines": 95
+}

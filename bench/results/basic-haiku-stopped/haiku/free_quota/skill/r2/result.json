@@ -1,0 +1,60 @@
+{
+  "run_id": "haiku/free_quota/skill/r2",
+  "model": "haiku",
+  "task": "free_quota",
+  "condition": "skill",
+  "rep": 2,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 90.5,
+  "cost_usd": 0.02172193,
+  "num_turns": 18,
+  "duration_s": 88.8,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 9,
+    "Read": 1,
+    "Edit": 5
+  },
+  "files_read": [
+    "pixforge/features/generate.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "git status --short && git log --oneline | head -5 && find . -path ./.git -prune -o -type f -print | grep -v '/.claude/' | head -200 && ls -la && cat CLAUDE.md AGENTS.md 2>/dev/null",
+    "for f in pixforge/quota.py pixforge/billing.py pixforge/pricing.py pixforge/clock.py pixforge/features/common.py pixforge/features/video.py pixforge/migrations/002_quota.sql pixforge/migrations/001_init.sql pixforge/db.py pixforge/i18n.py pixforge/users.py; do echo \"=== $f\"; cat -n $f; done",
+    "for f in pixforge/jobs.py pixforge/locales/en.json pixforge/locales/ru.json pixforge/sweeper.py tests/conftest.py tests/fakes.py tests/test_generate.py tests/test_i18n.py README.md docs/lumen_api.md; do echo \"=== $f\"; cat -n $f; done",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs/haiku/free_quota/skill/r2/repo; cat -n pixforge/quota.py pixforge/billing.py pixforge/pricing.py pixforge/clock.py pixforge/features/common.py pixforge/migrations/002_quota.sql pixforge/migrations/001_init.sql pixforge/db.py pixforge/i18n.py pixforge/users.py",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs/haiku/free_quota/skill/r2/repo; cat -n pixforge/jobs.py pixforge/locales/en.json pixforge/locales/ru.json pixforge/sweeper.py tests/conftest.py tests/fakes.py tests/test_generate.py tests/test_i18n.py README.md",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs/haiku/free_quota/skill/r2/repo; cat -n pixforge/features/video.py; echo ===; cat -n tests/test_video.py; echo ===; grep -rn \"quota\\|limit_for\\|consume\\|release\" --include=*.py . | grep -v \"^./lumen_sdk\"",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs/haiku/free_quota/skill/r2/repo; python3 -m pytest -q 2>&1 | tail -15",
+    "cat >> pixforge/features/generate.py <<'EOF'\n\n\ndef _fail(conn, job_id: int, error_code: str, *, refund: bool, user_id: int, limit: int | None, day: str) -> None:\n    \"\"\"Fail the job, and give back its free-plan quota unit if this call moved it to failed.\"\"\"\n    if fail_job(conn, job_id, error_code, refund=refund) and limit is not None:\n        quota.release(conn, user_id, \"image\", day)\nEOF\ntail -n 30 pixforge/features/generate.py",
+    "cat >> tests/test_generate.py <<'EOF'\n\n\ndef _generate_n(conn, lumen, user_id, n, prefix=\"req\"):\n    return [generate_image(conn, lumen, user_id, f\"p{i}\", f\"{prefix}-{i}\") for i in range(n)]\n\n\ndef test_free_plan_daily_image_limit(conn, lumen, user_id):\n    responses = _generate_n(conn, lumen, user_id, 6)\n    assert all(r[\"ok\"] for r in responses[:5])\n    sixth = responses[5]\n    assert not sixth[\"ok\"]\n    assert sixth[\"error_code\"] == \"daily_image_limit\"\n    assert sixth[\"job_id\"] is None\n    assert \"5 images\" in sixth[\"message\"]\n    assert len(lumen.calls) == 5\n    assert get_balance(conn, user_id) == 90\n\n\ndef test_daily_image_limit_message_is_localized(conn, lumen, user_id):\n    _generate_n(conn, lumen, user_id, 5)\n    response = generate_image(conn, lumen, user_id, \"p\", \"req-6\", locale=\"ru\")\n    assert response[\"message\"] == t(\"errors.daily_image_limit\", \"ru\", limit=5)\n    assert \"5 \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0439\" in response[\"message\"]\n\n\ndef test_image_limit_resets_at_utc_midnight(conn, lumen, user_id):\n    clock.set_now(datetime(2026, 3, 1, 23, 59, tzinfo=timezone.utc))\n    _generate_n(conn, lumen, user_id, 5)\n    assert not generate_image(conn, lumen, user_id, \"p\", \"req-6\")[\"ok\"]\n\n    clock.set_now(datetime(2026, 3, 2, 0, 0, tzinfo=timezone.utc))\n    assert generate_image(conn, lumen, user_id, \"p\", \"req-7\")[\"ok\"]\n\n\ndef test_image_quota_is_keyed_by_utc_day(conn, lumen, user_id):\n    # 20:00 at UTC-5 is 01:00 the next day in UTC.\n    local = timezone(timedelta(hours=-5))\n    clock.set_now(datetime(2026, 3, 1, 20, 0, tzinfo=local))\n    _generate_n(conn, lumen, user_id, 1)\n    assert quota.used(conn, user_id, \"image\", \"2026-03-02\") == 1\n    assert quota.used(conn, user_id, \"image\", \"2026-03-01\") == 0\n\n\ndef test_retry_does_not_take_quota(conn, lumen, user_id):\n    _generate_n(conn, lumen, user_id, 5)\n    again = generate_image(conn, lumen, user_id, \"p0\", \"req-0\")\n    assert again[\"ok\"]\n    assert quota.used(conn, user_id, \"image\") == 5\n    assert len(lumen.calls) == 5\n\n\ndef test_pro_plan_is_unlimited(conn, lumen, pro_user_id):\n    responses = _generate_n(conn, lumen, pro_user_id, 7)\n    assert all(r[\"ok\"] for r in responses)\n    assert quota.used(conn, pro_user_id, \"image\") == 0\n\n\ndef test_image_and_video_quotas_are_separate(conn, lumen, user_id):\n    callback = \"https://pixforge.test/hooks/lumen\"\n    assert start_video(conn, lumen, user_id, \"v\", \"vid-1\", callback)[\"ok\"]\n    assert start_video(conn, lumen, user_id, \"v\", \"vid-2\", callback)[\"ok\"]\n    assert generate_image(conn, lumen, user_id, \"p\", \"req-1\")[\"ok\"]\n    assert quota.used(conn, user_id, \"image\") == 1\n\n\ndef test_filtered_image_releases_quota(conn, lumen, user_id):\n    lumen.filter_next = True\n    assert not generate_image(conn, lumen, user_id, \"p\", \"req-1\")[\"ok\"]\n    assert quota.used(conn, user_id, \"image\") == 0\n    _generate_n(conn, lumen, user_id, 5, prefix=\"ok\")\n    assert quota.used(conn, user_id, \"image\") == 5\n\n\ndef test_provider_error_releases_quota(conn, lumen, user_id):\n    lumen.fail_with = LumenAPIError(500, \"internal\", \"boom\")\n    assert not generate_image(conn, lumen, user_id, \"p\", \"req-1\")[\"ok\"]\n    assert quota.used(conn, user_id, \"image\") == 0\n\n\ndef test_rate_limit_releases_quota(conn, lumen, user_id):\n    lumen.fail_with = LumenRateLimited(5)\n    assert not generate_image(conn, lumen, user_id, \"p\", \"req-1\")[\"ok\"]\n    assert quota.used(conn, user_id, \"image\") == 0\n\n\ndef test_insufficient_credits_releases_quota(conn, lumen):\n    poor = create_user(conn, \"poor@example.com\", balance=1)\n    assert not generate_image(conn, lumen, poor, \"p\", \"req-1\")[\"ok\"]\n    assert quota.used(conn, poor, \"image\") == 0\n\n\ndef test_racing_duplicate_request_rolls_back_quota(conn, lumen, user_id, monkeypatch):\n    # Simulate a racing duplicate: the early duplicate check misses, so the\n    # INSERT into jobs hits the UNIQUE(request_id) constraint.\n    generate_image(conn, lumen, user_id, \"p\", \"req-1\")\n    monkeypatch.setattr(jobs, \"get_job_by_request\", lambda conn, request_id: None)\n    with pytest.raises(sqlite3.IntegrityError):\n        generate_image(conn, lumen, user_id, \"p\", \"req-1\")\n    assert quota.used(conn, user_id, \"image\") == 1\nEOF\npython3 -m pytest -q 2>&1 | tail -30"
+  ],
+  "seam_table": true,
+  "output_chars": 5312,
+  "hidden": {
+    "test_sixth_image_of_the_day_is_refused": true,
+    "test_refused_request_is_not_charged_and_not_sent_to_provider": true,
+    "test_limit_message_is_localized_and_names_the_limit": true,
+    "test_pro_users_are_unlimited": true,
+    "test_limit_is_per_user": true,
+    "test_failed_generations_do_not_count": true,
+    "test_insufficient_credits_attempt_does_not_count": true,
+    "test_retried_request_id_counts_once": true,
+    "test_videos_do_not_use_up_the_image_limit": true,
+    "test_limit_resets_at_utc_midnight": true,
+    "test_locale_files_in_sync": true,
+    "test_no_direct_balance_writes": true
+  },
+  "hidden_passed": 12,
+  "hidden_total": 12,
+  "visible_green": true,
+  "visible_passed": 32,
+  "visible_total": 32,
+  "diff_lines": 146
+}

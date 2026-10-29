@@ -43,10 +43,10 @@ price table, so it has to be added rather than hardcoded for pro discounts to ap
 | `baseline` | — | — |
 | `skill` | `seam-audit` | "Before you start, use the `seam-audit` skill." |
 | `placebo` | `careful-dev` (generic best practices, similar length) | "Before you start, use the `careful-dev` skill." |
-| `skill_auto` | `seam-audit` | — (does it trigger by itself?) |
 
 `skill` vs `baseline` is the raw effect; `skill` vs `placebo` is the effect of *this*
-skill's content over a generic instruction; `skill_auto` measures triggering.
+skill's content over a generic instruction. Triggering is out of scope: the skill is
+always invoked explicitly.
 
 **Isolation.** Each run is `claude -p` in a fresh git copy of the fixture outside this
 repo, with a clean `HOME`, only `Read/Edit/Write/Glob/Grep/Bash/Skill` tools, Bash

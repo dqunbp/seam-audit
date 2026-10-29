@@ -1,0 +1,59 @@
+{
+  "run_id": "haiku/free_quota/baseline/r1",
+  "suite": "hard",
+  "model": "haiku",
+  "task": "free_quota",
+  "condition": "baseline",
+  "rep": 1,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 59.4,
+  "cost_usd": 0.014224490000000001,
+  "num_turns": 18,
+  "duration_s": 56.1,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Bash": 10,
+    "Edit": 6,
+    "Read": 1
+  },
+  "files_read": [
+    "tests/test_generate.py"
+  ],
+  "skills_invoked": [],
+  "bash_commands": [
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-hard-probe/haiku/free_quota/baseline/r1/repo 2>/dev/null || cd \"$PWD\"; pwd; git status --short; git log --oneline | head -5; find . -path ./.git -prune -o -type f -print | grep -v __pycache__ | head -100",
+    "cat pixforge/features/generate.py; echo ---; ls pixforge; echo ---; cat pyproject.toml 2>/dev/null | head -60",
+    "cd \"$(git rev-parse --show-toplevel 2>/dev/null || echo .)\"; pwd; git status --short; ls pixforge/features pixforge/locales tests 2>&1; echo ---; cat pixforge/quota.py; echo ---; cat pixforge/clock.py; echo ---; cat pixforge/i18n.py; echo ---; cat pixforge/features/common.py",
+    "pwd; git status --short; ls pixforge/features pixforge/locales tests",
+    "cat pixforge/quota.py; echo ---; cat pixforge/clock.py; echo ---; cat pixforge/i18n.py; echo ---; cat pixforge/features/common.py; echo ---; cat pixforge/locales/en.json; echo ---; cat pixforge/locales/ru.json",
+    "cat pixforge/features/video.py; echo ---; cat tests/test_generate.py; echo ---; cat tests/conftest.py; echo ---; cat tests/fakes.py | head -80; echo ---; grep -n \"daily\\|quota\\|limit\" -i tests/test_video.py | head -40; echo ---; cat pixforge/pricing.py | head -30; echo ---; cat pixforge/migrations/* 2>/dev/null | grep -n \"quota\" ",
+    "sed -n 1,40p tests/test_video.py; echo ---; ls pixforge/migrations; grep -rn \"quota\" pixforge/migrations | head",
+    "cat >> tests/test_generate.py <<'EOF'\n\n\ndef test_free_daily_image_limit(conn, lumen, user_id):\n    for i in range(5):\n        assert generate_image(conn, lumen, user_id, \"a cat\", f\"req-{i}\")[\"ok\"]\n    sixth = generate_image(conn, lumen, user_id, \"a cat\", \"req-5\", locale=\"en\")\n    assert not sixth[\"ok\"]\n    assert sixth[\"error_code\"] == \"daily_image_limit\"\n    assert \"5 images\" in sixth[\"message\"]\n    assert \"UTC\" in sixth[\"message\"]\n    assert len(lumen.calls) == 5\n    assert get_balance(conn, user_id) == 90\n\n\ndef test_daily_image_limit_message_is_localized(conn, lumen, user_id):\n    for i in range(5):\n        generate_image(conn, lumen, user_id, \"a cat\", f\"req-{i}\")\n    sixth = generate_image(conn, lumen, user_id, \"a cat\", \"req-5\", locale=\"ru\")\n    assert sixth[\"error_code\"] == \"daily_image_limit\"\n    assert \"5 \u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0439\" in sixth[\"message\"]\n    assert \"UTC\" in sixth[\"message\"]\n\n\ndef test_pro_images_are_unlimited(conn, lumen, pro_user_id):\n    for i in range(7):\n        assert generate_image(conn, lumen, pro_user_id, \"a cat\", f\"req-{i}\")[\"ok\"]\n    assert len(lumen.calls) == 7\n\n\ndef test_daily_image_limit_resets_at_utc_midnight(conn, lumen, user_id):\n    for i in range(5):\n        generate_image(conn, lumen, user_id, \"a cat\", f\"req-{i}\")\n    clock.set_now(datetime(2026, 3, 1, 23, 59, 59, tzinfo=timezone.utc))\n    assert not generate_image(conn, lumen, user_id, \"a cat\", \"req-late\")[\"ok\"]\n    clock.set_now(datetime(2026, 3, 2, 0, 0, 0, tzinfo=timezone.utc))\n    assert generate_image(conn, lumen, user_id, \"a cat\", \"req-next\")[\"ok\"]\n\n\ndef test_retry_with_same_request_id_does_not_use_quota(conn, lumen, user_id):\n    generate_image(conn, lumen, user_id, \"a cat\", \"req-1\")\n    for _ in range(3):\n        generate_image(conn, lumen, user_id, \"a cat\", \"req-1\")\n    assert quota.used(conn, user_id, \"image\") == 1\n\n\ndef test_provider_error_releases_quota(conn, lumen, user_id):\n    lumen.fail_with = LumenAPIError(500, \"internal\", \"boom\")\n    assert generate_image(conn, lumen, user_id, \"a cat\", \"req-0\")[\"error_code\"] == \"provider_failed\"\n    assert quota.used(conn, user_id, \"image\") == 0\n    for i in range(1, 6):\n        assert generate_image(conn, lumen, user_id, \"a cat\", f\"req-{i}\")[\"ok\"]\n\n\ndef test_rate_limited_releases_quota(conn, lumen, user_id):\n    lumen.fail_with = LumenRateLimited(5)\n    assert generate_image(conn, lumen, user_id, \"a cat\", \"req-0\")[\"error_code\"] == \"rate_limited\"\n    assert quota.used(conn, user_id, \"image\") == 0\n\n\ndef test_filtered_result_releases_quota(conn, lumen, user_id):\n    lumen.filter_next = True\n    assert generate_image(conn, lumen, user_id, \"a cat\", \"req-0\")[\"error_code\"] == \"content_filtered\"\n    assert quota.used(conn, user_id, \"image\") == 0\n\n\ndef test_insufficient_credits_releases_quota(conn, lumen):\n    from pixforge.users import create_user\n\n    poor = create_user(conn, \"poor@example.com\", balance=1)\n    response = generate_image(conn, lumen, poor, \"a cat\", \"req-1\")\n    assert response[\"error_code\"] == \"insufficient_credits\"\n    assert quota.used(conn, poor, \"image\") == 0\nEOF\npython - <<'EOF'\nimport re\np = \"tests/test_generate.py\"\ns = open(p).read()\ns = s.replace(\"from lumen_sdk import LumenAPIError, LumenRateLimited\\n\\nfrom pixforge.billing import get_balance\\n\",\n\"from datetime import datetime, timezone\\n\\nfrom lumen_sdk import LumenAPIError, LumenRateLimited\\n\\nfrom pixforge import clock, quota\\nfrom pixforge.billing import get_balance\\n\", 1)\nopen(p, \"w\").write(s)\nEOF\nhead -10 tests/test_generate.py; python -m pytest -q 2>&1 | tail -30",
+    "python -m pytest -q 2>&1 | tail -40",
+    "git status --short; git diff --stat"
+  ],
+  "seam_table": false,
+  "output_chars": 2641,
+  "hidden": {
+    "test_sixth_image_of_the_day_is_refused": true,
+    "test_refused_request_is_not_charged_and_not_sent_to_provider": true,
+    "test_limit_message_is_localized_and_names_the_limit": true,
+    "test_pro_users_are_unlimited": true,
+    "test_limit_is_per_user": true,
+    "test_failed_generations_do_not_count": true,
+    "test_insufficient_credits_attempt_does_not_count": true,
+    "test_retried_request_id_counts_once": true,
+    "test_videos_do_not_use_up_the_image_limit": true,
+    "test_limit_resets_at_utc_midnight": true,
+    "test_locale_files_in_sync": true,
+    "test_no_direct_balance_writes": true
+  },
+  "hidden_passed": 12,
+  "hidden_total": 12,
+  "visible_green": true,
+  "visible_passed": 29,
+  "visible_total": 29,
+  "diff_lines": 100
+}
