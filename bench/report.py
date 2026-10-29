@@ -9,7 +9,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from harness import CONDITIONS, TASKS
+from harness import CONDITIONS
 
 
 def mean(xs):
@@ -29,7 +29,7 @@ def main():
         raise SystemExit("no results")
     models = sorted({r["model"] for r in runs})
     conditions = [c for c in CONDITIONS if any(r["condition"] == c for r in runs)]
-    tasks = [t for t in TASKS if any(r["task"] == t for r in runs)]
+    tasks = list(dict.fromkeys(r["task"] for r in runs))
     cell = defaultdict(list)
     for r in runs:
         cell[(r["model"], r["task"], r["condition"])].append(r)

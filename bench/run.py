@@ -16,7 +16,9 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from harness import CONDITIONS, TASKS, agent_env, grade, prepare_repo, run_agent, suite_dir, task_prompt, transcript_metrics
+from harness import (
+    CONDITIONS, agent_env, grade, prepare_repo, run_agent, suite_dir, suite_tasks, task_prompt, transcript_metrics,
+)
 
 
 def one_run(model, task, condition, rep, args) -> dict:
@@ -33,7 +35,7 @@ def one_run(model, task, condition, rep, args) -> dict:
     env = agent_env(home, args.venv / "bin")
 
     suite = suite_dir(args.suite)
-    repo = prepare_repo(work, condition, suite)
+    repo = prepare_repo(work, condition, suite, task)
     prompt = task_prompt(task, condition, suite)
     (out / "prompt.txt").write_text(prompt)
     started = time.time()
@@ -46,6 +48,8 @@ def one_run(model, task, condition, rep, args) -> dict:
     result.update(transcript_metrics(out / "transcript.jsonl", repo))
     result.update(grade(repo, task, out, env, suite))
     (out / "result.json").write_text(json.dumps(result, indent=2))
+    if not args.keep_repos:
+        shutil.rmtree(work, ignore_errors=True)
     return result
 
 
@@ -53,7 +57,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", default="basic", help="directory under bench/suites/")
     parser.add_argument("--models", default="haiku")
-    parser.add_argument("--tasks", default=",".join(TASKS))
+    parser.add_argument("--tasks", default=None, help="comma-separated; default: all tasks of the suite")
     parser.add_argument("--conditions", default=",".join(CONDITIONS))
     parser.add_argument("--reps", type=int, default=3)
     parser.add_argument("--workers", type=int, default=4)
@@ -63,14 +67,16 @@ def main():
     parser.add_argument("--venv", type=Path, required=True)
     parser.add_argument("--workdir", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--keep-repos", action="store_true", help="keep agent repos after grading")
     args = parser.parse_args()
+    tasks = args.tasks.split(",") if args.tasks else suite_tasks(suite_dir(args.suite))
     args.out = args.out.resolve()
 
     jobs = [
         (model, task, condition, rep)
         for rep in range(1, args.reps + 1)
         for model in args.models.split(",")
-        for task in args.tasks.split(",")
+        for task in tasks
         for condition in args.conditions.split(",")
     ]
     print(f"{len(jobs)} runs, {args.workers} in parallel", flush=True)

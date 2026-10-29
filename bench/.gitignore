@@ -3,3 +3,4 @@ __pycache__/
 results/**/transcript.jsonl
 results/**/*.xml
 results/**/pytest_*.log
+suites/*/fixtures

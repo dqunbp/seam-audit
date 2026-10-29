@@ -1,0 +1,47 @@
+{
+  "pretix_commit": "e6f8f178aff537bc32dc7359a5f561b8074a269b",
+  "workdir": "src",
+  "git_exclude": ["src/pretix/locale/", "src/pretix/static/", "doc/"],
+  "visible_tests": ["tests/base/test_orders.py", "tests/api/test_orders.py", "tests/control/test_orders.py"],
+  "tasks": {
+    "extend_order": {
+      "function": "extend_order",
+      "hidden_count": 19,
+      "remove_tests": {
+        "src/tests/api/test_orders.py": [
+          "test_order_extend_paid", "test_order_extend_pending", "test_order_extend_expired_quota_empty",
+          "test_order_extend_expired_quota_ignore", "test_order_extend_expired_quota_waiting_list",
+          "test_order_extend_expired_quota_left"
+        ],
+        "src/tests/control/test_orders.py": [
+          "test_order_extend_not_pending", "test_order_extend_not_expired", "test_order_extend_overdue_quota_empty",
+          "test_order_extend_overdue_quota_blocked_by_waiting_list", "test_order_extend_expired_quota_left",
+          "test_order_extend_expired_quota_empty", "test_order_extend_expired_quota_empty_ignore",
+          "test_order_extend_expired_seat_free", "test_order_extend_expired_seat_blocked",
+          "test_order_extend_expired_seat_taken", "test_order_extend_expired_quota_partial",
+          "test_order_extend_expired_voucher_budget_ok", "test_order_extend_expired_voucher_budget_fail"
+        ]
+      }
+    },
+    "reactivate_order": {
+      "function": "reactivate_order",
+      "hidden_count": 14,
+      "remove_tests": {
+        "src/tests/base/test_orders.py": ["OrderReactivateTest"],
+        "src/tests/api/test_orders.py": ["test_order_reactivate", "test_order_reactivate_invalid"],
+        "src/tests/control/test_orders.py": ["test_order_reactivate_not_canceled", "test_order_reactivate"]
+      }
+    },
+    "expire_orders": {
+      "function": "expire_orders",
+      "hidden_count": 8,
+      "remove_tests": {
+        "src/tests/base/test_orders.py": [
+          "test_expiring", "test_expiring_paid_invoice", "test_expire_twice",
+          "test_expire_skipped_if_canceled_with_fee", "test_expiring_auto_disabled", "test_expiring_auto_delayed",
+          "test_expiring_auto_delayed_weekdays", "test_do_not_expire_if_approval_pending"
+        ]
+      }
+    }
+  }
+}

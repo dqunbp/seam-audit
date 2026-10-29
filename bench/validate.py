@@ -10,7 +10,7 @@ import argparse
 import shutil
 from pathlib import Path
 
-from harness import TASKS, agent_env, grade, prepare_repo, suite_dir
+from harness import agent_env, grade, install_reference, prepare_repo, suite_dir, suite_tasks
 
 
 def main():
@@ -22,14 +22,14 @@ def main():
     suite = suite_dir(args.suite)
     env = agent_env(Path.home(), args.venv / "bin")
     ok = True
-    for task in TASKS:
+    for task in suite_tasks(suite):
         for variant in ("untouched", "reference"):
             dest = args.workdir / task / variant
             shutil.rmtree(dest, ignore_errors=True)
             dest.mkdir(parents=True)
-            repo = prepare_repo(dest, "baseline", suite)
+            repo = prepare_repo(dest, "baseline", suite, task)
             if variant == "reference":
-                shutil.copytree(suite / "reference" / task, repo, dirs_exist_ok=True)
+                install_reference(repo, task, suite)
             g = grade(repo, task, dest, env, suite)
             failing = [name for name, passed in g["hidden"].items() if not passed]
             passing = [name for name, passed in g["hidden"].items() if passed]
