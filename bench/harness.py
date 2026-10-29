@@ -181,7 +181,7 @@ def _grade_removed_feature(repo: Path, task: str, out_dir: Path, env: dict, suit
     node_ids = []
     for rel, names in spec["remove_tests"].items():
         shutil.copy(suite / "fixtures" / "_original" / rel, repo / rel)
-        node_ids += [f"{Path(rel).relative_to(config['workdir'])}::{name}" for name in names]
+        node_ids += [f"{Path(rel).relative_to(config['workdir'])}::{name.replace('.', '::')}" for name in names]
     hidden_rc, hidden_log = _pytest(workdir, node_ids, out_dir / "hidden.xml", env)
     hidden = _junit(out_dir / "hidden.xml")
     visible = _junit(out_dir / "visible.xml")
