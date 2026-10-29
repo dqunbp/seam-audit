@@ -1,0 +1,72 @@
+{
+  "run_id": "haiku/send_download_reminders/skill/r5",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "send_download_reminders",
+  "condition": "skill",
+  "rep": 5,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 110.4,
+  "cost_usd": 0.024516,
+  "num_turns": 25,
+  "duration_s": 108.2,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 3,
+    "Glob": 1,
+    "Read": 5,
+    "Bash": 10,
+    "Edit": 3
+  },
+  "files_read": [
+    "src/pretix/base/models/orders.py",
+    "src/pretix/base/services/orders.py",
+    "src/pretix/base/settings.py",
+    "src/pretix/base/timeline.py",
+    "src/tests/base/test_orders.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "git log --oneline -3 && git log -S \"send_download_reminders\" --oneline | head -5; grep -rn \"send_download_reminders\\|download_reminder_sent\\|mail_send_download_reminder_attendee\" src --include=*.py --include=*.html | grep -v migrations | head -30; sed -n 1509,1530p src/pretix/base/services/orders.py; sed -n 2478,2492p src/pretix/base/settings.py; sed -n 285,300p src/pretix/base/models/orders.py",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/send_download_reminders/skill/r5/repo/src && grep -n \"def send_mail\" -A12 pretix/base/models/orders.py | head -40; grep -n \"sales_channel\" pretix/base/services/mail.py pretix/base/models/orders.py pretix/base/services/orders.py | head -20; grep -rn \"attendee_name\\|mail_send_download_reminder_attendee\\|send_mail_attendee\\|attendee.*mail\" pretix/base/services/*.py pretix/base/models/*.py | head -20; sed -n 180,190p pretix/base/models/orders.py; grep -n \"ticket_download'\" -A4 pretix/base/settings.py | head -12",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/send_download_reminders/skill/r5/repo && cat CLAUDE.md AGENTS.md 2>/dev/null | head -80; sed -n 55,75p src/pretix/helpers/periodic.py; sed -n 2914,2935p src/pretix/base/models/orders.py | head -5; grep -n \"def _send_attendee\\|download_reminder\\|attendee_mail\" src/tests/base/test_orders.py | head",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/send_download_reminders/skill/r5/repo/src && grep -rln \"send_expiry_warnings\" tests | head; grep -rn \"send_expiry_warnings\" -B3 -A30 tests/base/test_orders.py | head -70; grep -n \"^def mail(\" -A3 pretix/base/services/mail.py",
+    "sed -n 455,475p pretix/base/services/orders.py; grep -n \"has_subevents = \" pretix/base/models/event.py | head -3",
+    "timeout 580 python -m pytest tests/base/test_orders.py -k \"DownloadReminderTests or PaymentReminderTests\" tests/base/test_runperiodic.py -q -p no:cacheprovider 2>&1 | tail -30",
+    "timeout 580 python -m pytest tests/base/test_runperiodic.py -q -p no:cacheprovider 2>&1 | tail -5; python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -5; python -m isort -c pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -3",
+    "python -m pytest tests/base/test_runperiodic.py -q -p no:cacheprovider",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; python -m isort -c pretix/base/services/orders.py tests/base/test_orders.py",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py"
+  ],
+  "seam_table": true,
+  "output_chars": 6129,
+  "hidden": {
+    "base.test_orders.DownloadReminderTests::test_disabled": true,
+    "base.test_orders.DownloadReminderTests::test_downloads_all_allowed_by_plugin": false,
+    "base.test_orders.DownloadReminderTests::test_downloads_disabled": true,
+    "base.test_orders.DownloadReminderTests::test_downloads_disabled_by_plugin": false,
+    "base.test_orders.DownloadReminderTests::test_downloads_disabled_per_product": false,
+    "base.test_orders.DownloadReminderTests::test_downloads_partially_disabled_by_plugin": false,
+    "base.test_orders.DownloadReminderTests::test_not_sent_after_reminder_date": false,
+    "base.test_orders.DownloadReminderTests::test_not_sent_for_disabled_sales_channel": true,
+    "base.test_orders.DownloadReminderTests::test_not_sent_too_early": true,
+    "base.test_orders.DownloadReminderTests::test_not_sent_too_soon_after_purchase": false,
+    "base.test_orders.DownloadReminderTests::test_send_not_to_attendees_with_same_address": true,
+    "base.test_orders.DownloadReminderTests::test_send_to_attendees": true,
+    "base.test_orders.DownloadReminderTests::test_send_to_attendees_subevent_future": false,
+    "base.test_orders.DownloadReminderTests::test_send_to_attendees_subevent_past": true,
+    "base.test_orders.DownloadReminderTests::test_sent_once": true,
+    "base.test_orders.DownloadReminderTests::test_sent_paid_only": true
+  },
+  "hidden_passed": 9,
+  "hidden_total": 16,
+  "visible_green": true,
+  "visible_passed": 423,
+  "visible_total": 423,
+  "diff_lines": 162
+}

@@ -1,0 +1,268 @@
+diff --git a/src/pretix/base/services/orders.py b/src/pretix/base/services/orders.py
+index 79f0255..47ad7e6 100644
+--- a/src/pretix/base/services/orders.py
++++ b/src/pretix/base/services/orders.py
+@@ -3185,6 +3185,140 @@ def _try_auto_refund(order, auto_refund=True, manual_refund=False, allow_partial
+         )
+ 
+ 
++def _cancel_order(order, user=None, send_mail: bool=True, api_token=None, device=None,
++                  oauth_application=None, cancellation_fee=None, keep_fees=None, cancel_invoice=True,
++                  comment=None, tax_mode=None):
++    """
++    Cancel an order. Without a ``cancellation_fee``, the order is canceled completely. With a
++    ``cancellation_fee``, all positions and all fees except the ones in ``keep_fees`` are removed, and the
++    order is reduced to the cancellation fee (including the value of the kept fees), which the customer
++    still has to pay or which is kept from what they already paid.
++    :param order: The order to cancel (or its primary key)
++    :param user: The user that performed the change (or its primary key)
++    :param cancellation_fee: The total amount the order is reduced to, or ``None`` for a full cancellation
++    :param keep_fees: The ``OrderFee`` objects that are kept on the order
++    :param tax_mode: How the new cancellation fee is split over tax rules (``default``, ``split`` or ``zero``).
++                     Defaults to the event's ``tax_rule_cancellation`` setting.
++    :return: The primary key of the order
++    """
++    if isinstance(order, int):
++        order = Order.objects.get(pk=order)
++    if isinstance(user, int):
++        user = User.objects.get(pk=user)
++    if isinstance(api_token, int):
++        api_token = TeamAPIToken.objects.get(pk=api_token)
++    if isinstance(device, int):
++        device = Device.objects.get(pk=device)
++    if isinstance(oauth_application, int):
++        oauth_application = OAuthApplication.objects.get(pk=oauth_application)
++
++    if cancellation_fee is not None and (cancellation_fee < Decimal('0.00') or cancellation_fee > order.total):
++        raise OrderError(_('The cancellation fee cannot be higher than the total amount of this order.'))
++
++    with transaction.atomic():
++        if order.status == Order.STATUS_CANCELED:
++            raise OrderError(_('This order is already canceled.'))
++
++        event = order.event
++        positions = list(order.positions.all())
++        keep_fee_pks = {f.pk for f in keep_fees or []}
++        order.cancellation_requests.all().delete()
++
++        for p in order.payments.filter(state__in=(OrderPayment.PAYMENT_STATE_CREATED, OrderPayment.PAYMENT_STATE_PENDING)):
++            try:
++                p.payment_provider.cancel_payment(p)
++                order.log_action('pretix.event.order.payment.canceled', {
++                    'local_id': p.local_id,
++                    'provider': p.provider,
++                }, user=user, api_token=api_token, auth=device or oauth_application)
++            except PaymentException as e:
++                order.log_action('pretix.event.order.payment.canceled.failed', {
++                    'local_id': p.local_id,
++                    'provider': p.provider,
++                    'error': str(e)
++                }, user=user, api_token=api_token, auth=device or oauth_application)
++
++        for position in positions:
++            if position.voucher:
++                Voucher.objects.filter(pk=position.voucher.pk).update(redeemed=Greatest(0, F('redeemed') - 1))
++
++        if not cancellation_fee:
++            order.status = Order.STATUS_CANCELED
++            order.save(update_fields=['status'])
++        else:
++            kept_fee_sum = Decimal('0.00')
++            for f in order.fees.all():
++                if f.pk in keep_fee_pks:
++                    kept_fee_sum += f.value
++                else:
++                    f.canceled = True
++                    f.save(update_fields=['canceled'])
++
++            for position in positions:
++                position.canceled = True
++                position.save(update_fields=['canceled'])
++
++            new_fee = max(Decimal('0.00'), cancellation_fee - kept_fee_sum)
++            if new_fee:
++                tax_mode = tax_mode or event.settings.tax_rule_cancellation
++                tax_rule_zero = TaxRule.zero()
++                if tax_mode == 'default':
++                    fee_values = [(event.cached_default_tax_rule or tax_rule_zero, new_fee)]
++                elif tax_mode == 'split':
++                    fee_values = split_fee_for_taxes(positions, new_fee, event)
++                else:
++                    fee_values = [(tax_rule_zero, new_fee)]
++
++                try:
++                    ia = order.invoice_address
++                except InvoiceAddress.DoesNotExist:
++                    ia = None
++
++                for tax_rule, price in fee_values:
++                    tax_rule = tax_rule or tax_rule_zero
++                    tax = tax_rule.tax(price, invoice_address=ia, base_price_is="gross")
++                    order.fees.create(
++                        fee_type=OrderFee.FEE_TYPE_CANCELLATION,
++                        value=price,
++                        tax_rate=tax.rate,
++                        tax_code=tax.code,
++                        tax_value=tax.tax,
++                        tax_rule=tax_rule,
++                    )
++
++            order.total = sum(f.value for f in order.fees.all())
++            order.status = Order.STATUS_PAID if order.pending_sum <= Decimal('0.00') else Order.STATUS_PENDING
++            order.save(update_fields=['total', 'status'])
++
++        invoice = order.invoices.filter(is_cancellation=False).last()
++        if invoice and cancel_invoice and not invoice.refered.exists():
++            generate_cancellation(invoice)
++            invoice = None
++        if cancellation_fee and not invoice and event.settings.invoice_generate == 'True' and invoice_qualified(order):
++            generate_invoice(order)
++
++        log_data = {'comment': comment}
++        if cancellation_fee:
++            log_data['cancellation_fee'] = str(cancellation_fee)
++        order.log_action('pretix.event.order.canceled', data=log_data, user=user, api_token=api_token,
++                         auth=device or oauth_application)
++        order.create_transactions()
++
++    order_canceled.send(event, order=order)
++
++    if send_mail:
++        with language(order.locale, event.settings.region):
++            email_template = event.settings.mail_text_order_canceled
++            email_subject = event.settings.mail_subject_order_canceled
++            email_context = get_email_context(event=event, order=order, comment=comment)
++            order.send_mail(
++                email_subject, email_template, email_context,
++                'pretix.event.order.email.order_canceled', user
++            )
++
++    return order.pk
++
++
+ @app.task(base=ProfiledTask, bind=True, max_retries=5, default_retry_delay=1, throws=(OrderError,))
+ @scopes_disabled()
+ def cancel_order(self, order: int, user: int=None, send_mail: bool=True, api_token=None, oauth_application=None,
+diff --git a/src/tests/base/test_orders.py b/src/tests/base/test_orders.py
+index 6ab81c8..0ce0322 100644
+--- a/src/tests/base/test_orders.py
++++ b/src/tests/base/test_orders.py
+@@ -54,7 +54,7 @@ from pretix.base.services.invoices import (
+     generate_cancellation, generate_invoice,
+ )
+ from pretix.base.services.orders import (
+-    OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,
++    OrderChangeManager, OrderError, _cancel_order, _create_order, approve_order, cancel_order,
+     deny_order, expire_orders, reactivate_order, send_download_reminders,
+     send_expiry_warnings,
+ )
+@@ -775,6 +775,109 @@ def test_deny(event):
+     assert 'denied' in djmail.outbox[0].subject
+ 
+ 
++def _create_cancelable_order(event, code, status=Order.STATUS_PAID, total=Decimal('23.00')):
++    item = event.items.create(name='Ticket', default_price=Decimal('23.00'))
++    o = Order.objects.create(
++        code=code, event=event, email='dummy@dummy.test',
++        status=status, locale='en',
++        datetime=now(), expires=now() + timedelta(days=10),
++        total=total,
++        sales_channel=event.organizer.sales_channels.get(identifier="web"),
++    )
++    OrderPosition.objects.create(order=o, item=item, price=Decimal('23.00'))
++    return o
++
++
++@pytest.mark.django_db
++def test_cancel_order_completely(event):
++    djmail.outbox = []
++    event.settings.invoice_generate = 'True'
++    o = _create_cancelable_order(event, 'FOO', status=Order.STATUS_PENDING)
++    generate_invoice(o)
++    assert _cancel_order(o) == o.pk
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_CANCELED
++    assert o.invoices.count() == 2
++    assert o.invoices.filter(is_cancellation=True).count() == 1
++    assert len(djmail.outbox) == 1
++    assert o.positions.count() == 1
++
++
++@pytest.mark.django_db
++def test_cancel_order_completely_without_mail_and_invoice_cancellation(event):
++    djmail.outbox = []
++    event.settings.invoice_generate = 'True'
++    o = _create_cancelable_order(event, 'FOO2')
++    generate_invoice(o)
++    _cancel_order(o.pk, send_mail=False, cancel_invoice=False)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_CANCELED
++    assert o.invoices.count() == 1
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_cancel_order_already_canceled(event):
++    o = _create_cancelable_order(event, 'FOO3', status=Order.STATUS_CANCELED)
++    with pytest.raises(OrderError):
++        _cancel_order(o)
++
++
++@pytest.mark.django_db
++def test_cancel_order_with_fee_unpaid(event):
++    djmail.outbox = []
++    o = _create_cancelable_order(event, 'FOO4', status=Order.STATUS_PENDING)
++    assert _cancel_order(o, cancellation_fee=Decimal('5.00'), send_mail=False) == o.pk
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_PENDING
++    assert o.total == Decimal('5.00')
++    assert o.positions.count() == 0
++    fees = list(o.fees.all())
++    assert len(fees) == 1
++    assert fees[0].fee_type == OrderFee.FEE_TYPE_CANCELLATION
++    assert fees[0].value == Decimal('5.00')
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_cancel_order_with_fee_kept_from_payment(event):
++    o = _create_cancelable_order(event, 'FOO5', status=Order.STATUS_PAID)
++    o.payments.create(
++        state=OrderPayment.PAYMENT_STATE_CONFIRMED, amount=Decimal('23.00'), provider='banktransfer'
++    )
++    _cancel_order(o, cancellation_fee=Decimal('5.00'), send_mail=False)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_PAID
++    assert o.total == Decimal('5.00')
++    assert o.pending_sum == Decimal('-18.00')
++
++
++@pytest.mark.django_db
++def test_cancel_order_with_fee_keeps_selected_fees(event):
++    o = _create_cancelable_order(event, 'FOO6', status=Order.STATUS_PENDING, total=Decimal('25.00'))
++    kept = o.fees.create(fee_type=OrderFee.FEE_TYPE_SERVICE, value=Decimal('2.00'))
++    o.fees.create(fee_type=OrderFee.FEE_TYPE_SHIPPING, value=Decimal('3.00'))
++    _cancel_order(o, cancellation_fee=Decimal('10.00'), keep_fees=[kept], send_mail=False)
++    o.refresh_from_db()
++    assert o.total == Decimal('10.00')
++    assert o.status == Order.STATUS_PENDING
++    fees = {f.fee_type: f.value for f in o.fees.all()}
++    assert fees == {
++        OrderFee.FEE_TYPE_SERVICE: Decimal('2.00'),
++        OrderFee.FEE_TYPE_CANCELLATION: Decimal('8.00'),
++    }
++
++
++@pytest.mark.django_db
++def test_cancel_order_with_fee_larger_than_total(event):
++    o = _create_cancelable_order(event, 'FOO7', status=Order.STATUS_PENDING)
++    with pytest.raises(OrderError):
++        _cancel_order(o, cancellation_fee=Decimal('30.00'), send_mail=False)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_PENDING
++    assert o.positions.count() == 1
++
++
+ @pytest.mark.django_db(transaction=True)
+ def test_mark_invoices_as_sent(event):
+     djmail.outbox = []
