@@ -67,6 +67,53 @@
           "OrderChangeManagerTests.test_cancel_order_membership"
         ]
       }
+    },
+    "validate_memberships_in_order": {
+      "split": "heldout",
+      "function": "validate_memberships_in_order",
+      "module": "src/pretix/base/services/memberships.py",
+      "visible_tests": ["tests/base/test_memberships.py"],
+      "hidden_count": 12,
+      "remove_tests": {
+        "src/tests/base/test_memberships.py": [
+          "test_validate_membership_not_required", "test_validate_membership_required",
+          "test_validate_membership_ensure_locking", "test_validate_membership_canceled",
+          "test_validate_membership_test_mode", "test_validate_membership_wrong_customer",
+          "test_validate_membership_wrong_date", "test_validate_membership_wrong_type",
+          "test_validate_membership_max_usages", "test_validate_membership_parallel",
+          "test_validate_membership_parallel_validity_dynamic", "test_validate_membership_parallel_validity_fixed"
+        ]
+      }
+    },
+    "run_scheduled_exports": {
+      "split": "heldout",
+      "function": "run_scheduled_exports",
+      "module": "src/pretix/base/services/export.py",
+      "visible_tests": ["tests/base/test_export.py"],
+      "hidden_count": 13,
+      "remove_tests": {
+        "src/tests/base/test_export.py": [
+          "test_event_run_sets_new_time", "test_event_not_run_when_failed_5_times", "test_event_fail_invalid_config",
+          "test_event_fail_user_inactive", "test_event_fail_user_no_permission", "test_event_ok",
+          "test_organizer_run_sets_new_time", "test_organizer_not_run_when_failed_5_times",
+          "test_organizer_fail_invalid_config", "test_organizer_fail_user_inactive",
+          "test_organizer_fail_user_does_not_have_specific_permission", "test_organizer_limited_to_events",
+          "test_organizer_ok"
+        ]
+      }
+    },
+    "assign_automatically": {
+      "split": "heldout",
+      "function": "assign_automatically",
+      "module": "src/pretix/base/services/waitinglist.py",
+      "visible_tests": ["tests/base/test_waitinglist.py"],
+      "hidden_count": 4,
+      "remove_tests": {
+        "src/tests/base/test_waitinglist.py": [
+          "WaitingListTestCase.test_send_auto", "WaitingListTestCase.test_send_auto_respect_priority",
+          "WaitingListTestCase.test_send_auto_quota_infinite", "WaitingListTestCase.test_send_auto_no_seat"
+        ]
+      }
     }
   }
 }

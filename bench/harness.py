@@ -175,9 +175,10 @@ def _grade_removed_feature(repo: Path, task: str, out_dir: Path, env: dict, suit
     _git(repo, "add", "-A")
     diff = _git(repo, "diff", "--cached", "HEAD")
     (out_dir / "diff.patch").write_text(diff)
-    visible_rc, visible_log = _pytest(workdir, config["visible_tests"], out_dir / "visible.xml", env)
-
     spec = config["tasks"][task]
+    visible_tests = spec.get("visible_tests", config["visible_tests"])
+    visible_rc, visible_log = _pytest(workdir, visible_tests, out_dir / "visible.xml", env)
+
     node_ids = []
     for rel, names in spec["remove_tests"].items():
         shutil.copy(suite / "fixtures" / "_original" / rel, repo / rel)

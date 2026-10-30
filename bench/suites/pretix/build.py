@@ -91,10 +91,12 @@ def build_task(pretix: Path, out: Path, task: str, spec: dict) -> None:
         shutil.rmtree(dest)
     shutil.copytree(pretix, dest, symlinks=True,
                     ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__", ".pytest_cache"))
-    remove_definitions(dest / SERVICES, [spec["function"]])
+    module = spec.get("module", SERVICES)
+    remove_definitions(dest / module, [spec["function"]])
+    dotted = module.removeprefix("src/").removesuffix(".py").replace("/", ".")
     for test_file, names in spec["remove_tests"].items():
         remove_definitions(dest / test_file, names)
-        remove_import_names(dest / test_file, "pretix.base.services.orders", {spec["function"]})
+        remove_import_names(dest / test_file, dotted, {spec["function"]})
     print(f"built {dest}")
 
 
@@ -113,7 +115,7 @@ def main():
     original = args.out / "_original"
     for task, spec in config["tasks"].items():
         build_task(args.pretix, args.out, task, spec)
-        for rel in [SERVICES, *spec["remove_tests"]]:
+        for rel in [spec.get("module", SERVICES), *spec["remove_tests"]]:
             (original / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(args.pretix / rel, original / rel)
 
