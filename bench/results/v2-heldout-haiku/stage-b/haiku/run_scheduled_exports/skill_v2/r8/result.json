@@ -1,0 +1,73 @@
+{
+  "run_id": "haiku/run_scheduled_exports/skill_v2/r8",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "run_scheduled_exports",
+  "condition": "skill_v2",
+  "rep": 8,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 153.8,
+  "cost_usd": 0.035717399999999996,
+  "num_turns": 29,
+  "duration_s": 152.0,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 20,
+    "Edit": 5,
+    "Read": 1
+  },
+  "files_read": [
+    "src/tests/base/test_export.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "cat src/pretix/base/services/export.py && echo ---- && grep -rn -i \"scheduled\\|ScheduledExport\\|schedule_next\\|next_run\\|periodic\" --include=*.py --include=*.html --include=*.rst --include=*.md src doc 2>/dev/null | grep -v migrations | head -80",
+    "cat src/pretix/helpers/periodic.py | sed -n 20,80p; echo ----; sed -n 60,100p src/pretix/api/signals.py; echo ----; grep -n \"class Scheduled\\|schedule_next_run\\|def compute_next_run\\|objects\\|def \\|class \" src/pretix/base/models/exports.py | head -80; echo ----; sed -n 689,720p src/pretix/api/webhooks.py; echo ----; grep -rn \"periodic_task\" src/pretix --include=*.py | grep -v tests | head -30",
+    "sed -n 37,140p src/pretix/base/models/exports.py; echo ----; git log --oneline -S\"run_scheduled_exports\" | head; echo ----; sed -n 160,200p src/pretix/base/services/waitinglist.py; echo ----; sed -n 675,700p src/pretix/base/services/invoices.py; echo ----; grep -rn \"scheduled\\|schedule\" src/pretix/base/services/export.py src/pretix/base/signals.py | head; echo ----; grep -rn \"run_scheduled\\|scheduled_event_export\\|scheduled_organizer_export\" src/tests | head -20",
+    "grep -rn \"scheduled_event_export\\|scheduled_organizer_export\\|export_failed\" src/pretix --include=*.py --include=*.txt --include=*.html | grep -v \"^src/pretix/base/services/export.py\"; echo ----; grep -n \"class EventTask\\|class OrganizerTask\\|def __call__\\|def run\\|event_id\\|organizer_id\\|def _get\" -A4 src/pretix/base/services/tasks.py | head -90; echo ----; grep -rln -i \"scheduled\" doc | head; echo ----; grep -n \"periodic_task\" -B2 -A12 src/pretix/base/celery_tasks.py src/pretix/celery_app.py 2>/dev/null | head -40; grep -rn \"periodic_task\" src/pretix/base/tasks.py src/pretix/*.py 2>/dev/null | head",
+    "sed -n 3025,3040p src/pretix/control/views/orders.py; echo ----; sed -n 2328,2340p src/pretix/control/views/organizer.py; echo ----; grep -rn -i \"schedul\" doc/api/resources/scheduled_exports.rst | head -20; echo ----; grep -rn \"periodic_task.send\\|periodic_task\\.send\" src/pretix | head; echo ----; grep -rn \"def periodic_task\\|periodic_task = \" -A3 src/pretix/base/signals.py; echo ----; sed -n 1,60p src/pretix/base/services/mail.py | grep -n \"import\" | head -3; sed -n 1100,1140p src/pretix/base/services/mail.py",
+    "sed -n 46,56p doc/api/resources/scheduled_exports.rst; echo ----; grep -rn \"error_counter\" src/pretix --include=*.py --include=*.html | grep -v migrations; echo ----; grep -rn \"live\" src/pretix/base/services/export.py | head -3; echo ----; ls src/tests/base/ | grep -i export; grep -rln \"scheduled_exports\\|ScheduledEventExport\\|ScheduledOrganizerExport\" src/tests | head",
+    "grep -n \"schedul\\|Schedul\\|^import\\|^from\\|^@pytest\\|^class \\|^def \" src/tests/base/test_export.py | head -80; echo ----; grep -n \"class ScheduledExport\\|def test_.*schedul\" -A3 src/tests/base/test_export.py | head -60",
+    "sed -n 35,130p src/tests/base/test_export.py; echo ----; grep -n \"def test_\" src/tests/base/test_export.py | head -60; wc -l src/tests/base/test_export.py",
+    "grep -rn \"ScheduledEventExport.objects.create\\|ScheduledOrganizerExport.objects.create\" -A12 src/tests | head -60; echo ----; grep -rn \"schedule_rrule=\" src/tests | head -3; grep -rn \"DTSTART\\|rrule\" src/pretix/control/forms/exports.py | head -5",
+    "cat >> src/pretix/base/services/export.py <<'EOF'\n\n\n@receiver(signal=periodic_task)\n@scopes_disabled()\ndef run_scheduled_exports(sender, **kwargs):\n    \"\"\"\n    Dispatch all scheduled exports (event-level and organizer-level) that are due. The next run is computed and\n    stored before the task is dispatched, so one occurrence is never dispatched twice. Schedules that failed too\n    often are skipped.\n    \"\"\"\n    skip_locked = connection.features.has_select_for_update_skip_locked\n\n    with transaction.atomic():\n        for schedule in ScheduledEventExport.objects.select_related('event').filter(\n            schedule_next_run__lte=now(),\n            error_counter__lt=SCHEDULED_EXPORT_MAX_ERRORS,\n        ).select_for_update(of=OF_SELF, skip_locked=skip_locked):\n            schedule.compute_next_run()\n            schedule.save(update_fields=['schedule_next_run'])\n            scheduled_event_export.apply_async(\n                kwargs={\n                    'event': schedule.event_id,\n                    'schedule': schedule.pk,\n                },\n            )\n\n    with transaction.atomic():\n        for schedule in ScheduledOrganizerExport.objects.filter(\n            schedule_next_run__lte=now(),\n            error_counter__lt=SCHEDULED_EXPORT_MAX_ERRORS,\n        ).select_for_update(of=OF_SELF, skip_locked=skip_locked):\n            schedule.compute_next_run()\n            schedule.save(update_fields=['schedule_next_run'])\n            scheduled_organizer_export.apply_async(\n                kwargs={\n                    'organizer': schedule.organizer_id,\n                    'schedule': schedule.pk,\n                },\n            )\nEOF\ntail -5 src/pretix/base/services/export.py; cd src && python -m flake8 pretix/base/services/export.py && python -m isort --check-only --diff pretix/base/services/export.py && echo LINT_OK",
+    "sed -n 30,36p src/tests/base/test_export.py",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-stageB/haiku/run_scheduled_exports/skill_v2/r8/repo/src && timeout 500000 python -m pytest tests/base/test_export.py -q -p no:cacheprovider 2>&1 | tail -30; python -m flake8 pretix/base/services/export.py tests/base/test_export.py && echo FLAKE_OK; python -m isort --check-only pretix/base/services/export.py tests/base/test_export.py && echo ISORT_OK",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-stageB/haiku/run_scheduled_exports/skill_v2/r8/repo/src && python -m pytest tests/base/test_export.py -q -p no:cacheprovider",
+    "python -m flake8 pretix/base/services/export.py tests/base/test_export.py; echo \"flake8 exit $?\"; python -m isort --check-only pretix/base/services/export.py tests/base/test_export.py; echo \"isort exit $?\"",
+    "python -m flake8 pretix/base/services/export.py tests/base/test_export.py",
+    "python -m pytest tests/api/test_exporters.py -q -p no:cacheprovider -k \"schedul\"",
+    "python -m pytest tests/control/test_export.py -q -p no:cacheprovider -k \"schedul\"",
+    "grep -rn \"services.export\\|services import export\\|base.services.cleanup\\|services.invoices\" pretix/base/apps.py pretix/base/signals.py pretix/celery_app.py pretix/base/*.py pretix/settings.py 2>/dev/null | head; grep -rln \"from pretix.base.services import\\|services.export import\" pretix --include=*.py | head -5",
+    "sed -n 22,40p pretix/base/management/commands/runperiodic.py; grep -rn \"autodiscover\\|include(\\|import_string\\|receivers\" pretix/celery_app.py pretix/base/apps.py pretix/base/management/commands/runperiodic.py | head",
+    "grep -rn \"services.cleanup\\|services\\.export\\b\\|services import\" pretix --include=*.py | grep -v \"^pretix/base/services/\" | grep -i \"cleanup\\|export\\|ready\\|import_module\" | head; grep -rn \"def ready\" -A8 pretix/base/apps.py | head -20; grep -rn \"services.cleanup\\|\\\"cleanup\\\"\\|'cleanup'\" pretix/base/*.py pretix/*.py | head -3"
+  ],
+  "seam_table": false,
+  "output_chars": 6381,
+  "hidden": {
+    "base.test_export::test_event_run_sets_new_time": true,
+    "base.test_export::test_event_not_run_when_failed_5_times": true,
+    "base.test_export::test_event_fail_invalid_config": true,
+    "base.test_export::test_event_fail_user_inactive": true,
+    "base.test_export::test_event_fail_user_no_permission": true,
+    "base.test_export::test_organizer_run_sets_new_time": true,
+    "base.test_export::test_organizer_not_run_when_failed_5_times": true,
+    "base.test_export::test_organizer_fail_invalid_config": true,
+    "base.test_export::test_organizer_fail_user_inactive": true,
+    "base.test_export::test_organizer_fail_user_does_not_have_specific_permission": true,
+    "base.test_export::test_event_ok": true,
+    "base.test_export::test_organizer_limited_to_events": true,
+    "base.test_export::test_organizer_ok": true
+  },
+  "hidden_passed": 13,
+  "hidden_total": 13,
+  "visible_green": true,
+  "visible_passed": 6,
+  "visible_total": 6,
+  "diff_lines": 137
+}

@@ -1,0 +1,208 @@
+diff --git a/src/pretix/base/services/export.py b/src/pretix/base/services/export.py
+index 493bf71..1bd1663 100644
+--- a/src/pretix/base/services/export.py
++++ b/src/pretix/base/services/export.py
+@@ -494,3 +494,40 @@ def scheduled_event_export(self, event: Event, schedule: int) -> None:
+     )
+ 
+ 
++def _dispatch_due_scheduled_exports(model, task, parent_field):
++    """
++    Dispatch all schedules of ``model`` whose next run is due. The next run time is advanced in the same
++    transaction that dispatches the task, under a row lock, so an occurrence is never dispatched twice even if
++    several workers run the periodic job concurrently. A failing schedule is rolled back (and thus retried on
++    the next periodic run) without blocking the other schedules.
++    """
++    due_ids = list(model.objects.filter(schedule_next_run__lte=now()).values_list('pk', flat=True))
++    for pk in due_ids:
++        try:
++            with transaction.atomic():
++                s = model.objects.select_for_update(
++                    of=OF_SELF, skip_locked=connection.features.has_select_for_update_skip_locked
++                ).filter(pk=pk, schedule_next_run__lte=now()).first()
++                if s is None:
++                    # Locked by another worker, or already dispatched by another worker
++                    continue
++                s.compute_next_run()
++                s.save(update_fields=['schedule_next_run'])
++                task.apply_async(kwargs={
++                    parent_field: getattr(s, f'{parent_field}_id'),
++                    'schedule': s.pk,
++                })
++        except Exception:
++            logger.exception(f"Could not dispatch scheduled export {pk} of {model.__name__}.")
++
++
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def run_scheduled_exports(sender, **kwargs):
++    """
++    Dispatch event-level and organizer-level scheduled exports that are due.
++    """
++    _dispatch_due_scheduled_exports(ScheduledEventExport, scheduled_event_export, 'event')
++    _dispatch_due_scheduled_exports(ScheduledOrganizerExport, scheduled_organizer_export, 'organizer')
++
++
+diff --git a/src/tests/base/test_scheduled_exports.py b/src/tests/base/test_scheduled_exports.py
+new file mode 100644
+index 0000000..18c69ec
+--- /dev/null
++++ b/src/tests/base/test_scheduled_exports.py
+@@ -0,0 +1,157 @@
++#
++# This file is part of pretix (Community Edition).
++#
++# Copyright (C) 2014-2020  Raphael Michel and contributors
++# Copyright (C) 2020-today pretix GmbH and contributors
++#
++# This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General
++# Public License as published by the Free Software Foundation in version 3 of the License.
++#
++# ADDITIONAL TERMS APPLY: Pursuant to Section 7 of the GNU Affero General Public License, additional terms are
++# applicable granting you additional permissions and placing additional restrictions on your usage of this software.
++# Please refer to the pretix LICENSE file to obtain the full terms applicable to this work. If you did not receive
++# this file, see <https://pretix.eu/about/en/license>.
++#
++# This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
++# warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public License for more
++# details.
++#
++# You should have received a copy of the GNU Affero General Public License along with this program.  If not, see
++# <https://www.gnu.org/licenses/>.
++#
++from datetime import datetime, time, timezone
++from unittest import mock
++
++import pytest
++from django_scopes import scope
++from freezegun import freeze_time
++
++from pretix.base.models import (
++    Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,
++)
++from pretix.base.services.export import run_scheduled_exports
++
++RRULE = "DTSTART:20230118T000000\nRRULE:FREQ=DAILY;INTERVAL=1;WKST=MO"
++
++
++@pytest.fixture(scope='function')
++def event():
++    o = Organizer.objects.create(name='Dummy', slug='dummy')
++    event = Event.objects.create(
++        organizer=o, name='Dummy', slug='dummy',
++        date_from=datetime(2023, 1, 19, 2, 30, 0, tzinfo=timezone.utc),
++        plugins='pretix.plugins.banktransfer'
++    )
++    o.settings.timezone = "Europe/Berlin"
++    with scope(organizer=o):
++        yield event
++
++
++@pytest.fixture
++def user(event):
++    user = User.objects.create_user('dummy@dummy.dummy', 'dummy')
++    event.organizer.teams.create(all_events=True, all_event_permissions=True).members.add(user)
++    return user
++
++
++def _event_schedule(event, user, next_run, mail_subject='EVENT'):
++    s = ScheduledEventExport(event=event, owner=user, mail_subject=mail_subject)
++    s.schedule_rrule = RRULE
++    s.schedule_rrule_time = time(2, 30, 0)
++    s.schedule_next_run = next_run
++    s.save()
++    return s
++
++
++def _organizer_schedule(organizer, user, next_run, mail_subject='ORGANIZER'):
++    s = ScheduledOrganizerExport(organizer=organizer, owner=user, mail_subject=mail_subject)
++    s.schedule_rrule = RRULE
++    s.schedule_rrule_time = time(2, 30, 0)
++    s.schedule_next_run = next_run
++    s.save()
++    return s
++
++
++@pytest.mark.django_db
++@freeze_time("2023-01-20 12:00:00")
++def test_due_event_schedule_is_dispatched_and_advanced(event, user):
++    s = _event_schedule(event, user, datetime(2023, 1, 20, 11, 0, tzinfo=timezone.utc))
++    with mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as apply_async, \
++            mock.patch('pretix.base.services.export.scheduled_organizer_export.apply_async') as org_apply_async:
++        run_scheduled_exports(sender=None)
++
++    apply_async.assert_called_once_with(kwargs={'event': event.pk, 'schedule': s.pk})
++    org_apply_async.assert_not_called()
++    s.refresh_from_db()
++    assert s.schedule_next_run > datetime(2023, 1, 20, 12, 0, tzinfo=timezone.utc)
++
++
++@pytest.mark.django_db
++@freeze_time("2023-01-20 12:00:00")
++def test_due_organizer_schedule_is_dispatched_and_advanced(event, user):
++    s = _organizer_schedule(event.organizer, user, datetime(2023, 1, 20, 11, 0, tzinfo=timezone.utc))
++    with mock.patch('pretix.base.services.export.scheduled_organizer_export.apply_async') as apply_async, \
++            mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as event_apply_async:
++        run_scheduled_exports(sender=None)
++
++    apply_async.assert_called_once_with(kwargs={'organizer': event.organizer.pk, 'schedule': s.pk})
++    event_apply_async.assert_not_called()
++    s.refresh_from_db()
++    assert s.schedule_next_run > datetime(2023, 1, 20, 12, 0, tzinfo=timezone.utc)
++
++
++@pytest.mark.django_db
++@freeze_time("2023-01-20 12:00:00")
++def test_not_yet_due_schedules_are_skipped(event, user):
++    future = datetime(2023, 1, 20, 13, 0, tzinfo=timezone.utc)
++    es = _event_schedule(event, user, future)
++    os_ = _organizer_schedule(event.organizer, user, future)
++    with mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as ev, \
++            mock.patch('pretix.base.services.export.scheduled_organizer_export.apply_async') as org:
++        run_scheduled_exports(sender=None)
++
++    ev.assert_not_called()
++    org.assert_not_called()
++    es.refresh_from_db()
++    os_.refresh_from_db()
++    assert es.schedule_next_run == future
++    assert os_.schedule_next_run == future
++
++
++@pytest.mark.django_db
++@freeze_time("2023-01-20 12:00:00")
++def test_schedule_without_next_run_is_skipped(event, user):
++    s = _event_schedule(event, user, None)
++    with mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as apply_async:
++        run_scheduled_exports(sender=None)
++
++    apply_async.assert_not_called()
++    s.refresh_from_db()
++    assert s.schedule_next_run is None
++
++
++@pytest.mark.django_db
++@freeze_time("2023-01-20 12:00:00")
++def test_running_twice_dispatches_once(event, user):
++    _event_schedule(event, user, datetime(2023, 1, 20, 11, 0, tzinfo=timezone.utc))
++    with mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as apply_async:
++        run_scheduled_exports(sender=None)
++        run_scheduled_exports(sender=None)
++
++    assert apply_async.call_count == 1
++
++
++@pytest.mark.django_db
++@freeze_time("2023-01-20 12:00:00")
++def test_failing_dispatch_does_not_block_other_schedules(event, user):
++    failing = _event_schedule(event, user, datetime(2023, 1, 20, 11, 0, tzinfo=timezone.utc), 'FAILING')
++    ok = _organizer_schedule(event.organizer, user, datetime(2023, 1, 20, 11, 0, tzinfo=timezone.utc))
++    with mock.patch('pretix.base.services.export.scheduled_event_export.apply_async',
++                    side_effect=ConnectionError('broker down')), \
++            mock.patch('pretix.base.services.export.scheduled_organizer_export.apply_async') as org_apply_async:
++        run_scheduled_exports(sender=None)
++
++    org_apply_async.assert_called_once_with(kwargs={'organizer': event.organizer.pk, 'schedule': ok.pk})
++    failing.refresh_from_db()
++    # The failed dispatch was rolled back, so the occurrence stays due and is retried on the next run
++    assert failing.schedule_next_run == datetime(2023, 1, 20, 11, 0, tzinfo=timezone.utc)

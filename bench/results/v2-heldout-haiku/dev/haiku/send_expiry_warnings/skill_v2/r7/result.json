@@ -1,0 +1,59 @@
+{
+  "run_id": "haiku/send_expiry_warnings/skill_v2/r7",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "send_expiry_warnings",
+  "condition": "skill_v2",
+  "rep": 7,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 122.1,
+  "cost_usd": 0.02696782,
+  "num_turns": 34,
+  "duration_s": 119.9,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 8,
+    "Read": 15,
+    "Edit": 4,
+    "Bash": 4
+  },
+  "files_read": [
+    "src/pretix/base/models/orders.py",
+    "src/pretix/base/services/mail.py",
+    "src/pretix/base/services/orders.py",
+    "src/pretix/base/settings.py",
+    "src/pretix/plugins/banktransfer/tasks.py",
+    "src/tests/base/test_orders.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-v2dev/haiku/send_expiry_warnings/skill_v2/r7/repo/src && timeout 900 python -m pytest tests/base/test_orders.py -k \"ExpiryWarningTests or DownloadReminderTests\" -q -p no:cacheprovider 2>&1 | tail -40",
+    "(python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit $?\"; python -m isort -c pretix/base/services/orders.py tests/base/test_orders.py; echo \"isort exit $?\") 2>&1 | tail -20",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit $?\"; python -m isort -c pretix/base/services/orders.py tests/base/test_orders.py; echo \"isort exit $?\"",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py"
+  ],
+  "seam_table": false,
+  "output_chars": 5137,
+  "hidden": {
+    "base.test_orders.PaymentReminderTests::test_disabled": true,
+    "base.test_orders.PaymentReminderTests::test_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_confirmed_but_not_all_paid": false,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_failed_state": false,
+    "base.test_orders.PaymentReminderTests::test_sent_days": false,
+    "base.test_orders.PaymentReminderTests::test_sent_no_expiry": false,
+    "base.test_orders.PaymentReminderTests::test_sent_not_immediately_after_purchase": true,
+    "base.test_orders.PaymentReminderTests::test_sent_once": false
+  },
+  "hidden_passed": 4,
+  "hidden_total": 9,
+  "visible_green": true,
+  "visible_passed": 432,
+  "visible_total": 432,
+  "diff_lines": 153
+}

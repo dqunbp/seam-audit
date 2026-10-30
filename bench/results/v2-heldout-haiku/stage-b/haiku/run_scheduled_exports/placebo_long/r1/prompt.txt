@@ -1,0 +1,7 @@
+This is pretix, an event ticketing system (Django). Users can schedule data exports, for a single event or for a whole organizer account, that are supposed to be generated and sent out automatically on their schedule. Nothing is ever sent: the periodic job that runs them is missing from `src/pretix/base/services/export.py`.
+
+Implement it as `run_scheduled_exports(sender, **kwargs)` in `src/pretix/base/services/export.py`, run by pretix's periodic task mechanism in the same way as the other periodic jobs. It must handle both event-level and organizer-level scheduled exports.
+
+Add tests for it. The development environment is installed: run tests from `src/` with `python -m pytest <test files>` (the full suite is very slow, so run the relevant test files).
+
+Before you start, use the `careful-dev` skill.

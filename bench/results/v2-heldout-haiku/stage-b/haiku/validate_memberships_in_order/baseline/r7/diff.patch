@@ -1,0 +1,233 @@
+diff --git a/src/pretix/base/services/memberships.py b/src/pretix/base/services/memberships.py
+index d720914..83af77e 100644
+--- a/src/pretix/base/services/memberships.py
++++ b/src/pretix/base/services/memberships.py
+@@ -19,6 +19,7 @@
+ # You should have received a copy of the GNU Affero General Public License along with this program.  If not, see
+ # <https://www.gnu.org/licenses/>.
+ #
++from collections import Counter
+ from datetime import timedelta
+ from typing import List, Optional
+ 
+@@ -83,3 +84,65 @@ def create_membership(customer: Customer, position: OrderPosition):
+     )
+ 
+ 
++def validate_memberships_in_order(customer: Optional[Customer], positions: List[AbstractPosition], event: Event,
++                                  lock=False, ignored_order: Optional[Order] = None, testmode=False,
++                                  valid_from_not_chosen=False):
++    """
++    Checks that every position requiring a membership uses a membership of ``customer`` that allows it for this
++    position, is valid, and still has usages left. Raises a ``ValidationError`` otherwise.
++
++    ``ignored_order`` is not counted towards membership usages, which is needed when an existing order is changed.
++    ``valid_from_not_chosen`` is passed on to the validity check of the membership.
++    """
++    required = []
++    for p in positions:
++        if p.item.require_membership or (p.variation and p.variation.require_membership):
++            required.append(p)
++        elif p.used_membership_id:
++            raise ValidationError(_('The product "{item}" does not require a membership, but one was selected.').format(
++                item=p.item.name,
++            ))
++
++    if not required:
++        return
++
++    for p in required:
++        m = p.used_membership
++        if not m:
++            raise ValidationError(_('Your cart includes a product that requires an active membership to be selected.'))
++        if not customer or m.customer_id != customer.pk:
++            raise ValidationError(_('The membership selected for "{item}" does not belong to your account.').format(
++                item=p.item.name,
++            ))
++        if m.testmode != testmode:
++            raise ValidationError(_('The membership selected for "{item}" can not be used for this order.').format(
++                item=p.item.name,
++            ))
++
++        if p.variation and p.variation.require_membership:
++            types = p.variation.require_membership_types.all()
++        else:
++            types = p.item.require_membership_types.all()
++        if m.membership_type_id not in {t.pk for t in types}:
++            raise ValidationError(_('The membership selected for "{item}" does not allow this product.').format(
++                item=p.item.name,
++            ))
++
++        if not m.is_valid(p.subevent or event, ticket_valid_from=p.valid_from,
++                          valid_from_not_chosen=valid_from_not_chosen):
++            raise ValidationError(_('The membership selected for "{item}" is not valid for this date.').format(
++                item=p.item.name,
++            ))
++
++    requested = Counter(p.used_membership_id for p in required)
++    memberships = Membership.objects.with_usages(ignored_order=ignored_order)
++    if lock:
++        memberships = memberships.select_for_update(of=OF_SELF)
++    for m in memberships.filter(pk__in=list(requested)).select_related('membership_type'):
++        max_usages = m.membership_type.max_usages
++        if max_usages is not None and m.usages + requested[m.pk] > max_usages:
++            raise ValidationError(_('The membership "{name}" does not have enough usages left for all selected products.').format(
++                name=m.membership_type.name,
++            ))
++
++
+diff --git a/src/tests/base/test_memberships.py b/src/tests/base/test_memberships.py
+index 07c83a7..e17c65d 100644
+--- a/src/tests/base/test_memberships.py
++++ b/src/tests/base/test_memberships.py
+@@ -36,7 +36,7 @@ from pretix.base.models import (
+     CartPosition, Event, Item, Order, OrderPosition, Organizer,
+ )
+ from pretix.base.services.memberships import (
+-    membership_validity,
++    membership_validity, validate_memberships_in_order,
+ )
+ from pretix.base.services.orders import (
+     OrderError, _create_order, _perform_order,
+@@ -255,3 +255,141 @@ def test_grant_when_paid_and_changed(event, customer, granting_ticket):
+     assert m.membership_type == granting_ticket.grant_membership_type
+     assert m.date_start == datetime(2021, 4, 27, 10, 0, 0, 0, tzinfo=TZ)
+     assert m.date_end == datetime(2021, 4, 28, 10, 0, 0, 0, tzinfo=TZ)
++
++
++def _cart_position(event, item, membership=None, cart_id="123"):
++    return CartPosition.objects.create(
++        item=item, price=23, expires=now() + timedelta(days=1), event=event, cart_id=cart_id,
++        used_membership=membership,
++    )
++
++
++@pytest.mark.django_db
++def test_validate_memberships_not_required(event, customer, granting_ticket):
++    cp1 = _cart_position(event, granting_ticket)
++    validate_memberships_in_order(None, [cp1], event)
++
++
++@pytest.mark.django_db
++def test_validate_memberships_not_required_but_selected(event, customer, membership, granting_ticket):
++    cp1 = _cart_position(event, granting_ticket, membership)
++    with pytest.raises(ValidationError) as excinfo:
++        validate_memberships_in_order(customer, [cp1], event)
++    assert 'does not require' in excinfo.value.message
++
++
++@pytest.mark.django_db
++def test_validate_memberships_valid(event, customer, membership, requiring_ticket):
++    cp1 = _cart_position(event, requiring_ticket, membership)
++    validate_memberships_in_order(customer, [cp1], event)
++
++
++@pytest.mark.django_db
++def test_validate_memberships_not_selected(event, customer, requiring_ticket):
++    cp1 = _cart_position(event, requiring_ticket)
++    with pytest.raises(ValidationError) as excinfo:
++        validate_memberships_in_order(customer, [cp1], event)
++    assert 'membership' in excinfo.value.message
++
++
++@pytest.mark.django_db
++def test_validate_memberships_no_customer(event, membership, requiring_ticket):
++    cp1 = _cart_position(event, requiring_ticket, membership)
++    with pytest.raises(ValidationError) as excinfo:
++        validate_memberships_in_order(None, [cp1], event)
++    assert 'account' in excinfo.value.message
++
++
++@pytest.mark.django_db
++def test_validate_memberships_other_customer(event, customer, membership, requiring_ticket):
++    other = event.organizer.customers.create(email="jane@example.org")
++    cp1 = _cart_position(event, requiring_ticket, membership)
++    with pytest.raises(ValidationError) as excinfo:
++        validate_memberships_in_order(other, [cp1], event)
++    assert 'account' in excinfo.value.message
++
++
++@pytest.mark.django_db
++def test_validate_memberships_wrong_type(event, customer, requiring_ticket):
++    other_type = event.organizer.membership_types.create(name="Half pass")
++    membership = customer.memberships.create(
++        membership_type=other_type,
++        date_start=datetime(2021, 4, 1, 0, 0, 0, 0, tzinfo=TZ),
++        date_end=datetime(2021, 4, 30, 23, 59, 59, 999999, tzinfo=TZ),
++    )
++    cp1 = _cart_position(event, requiring_ticket, membership)
++    with pytest.raises(ValidationError) as excinfo:
++        validate_memberships_in_order(customer, [cp1], event)
++    assert 'does not allow' in excinfo.value.message
++
++
++@pytest.mark.django_db
++def test_validate_memberships_testmode(event, customer, membership, requiring_ticket):
++    membership.testmode = True
++    membership.save()
++    cp1 = _cart_position(event, requiring_ticket, membership)
++    with pytest.raises(ValidationError) as excinfo:
++        validate_memberships_in_order(customer, [cp1], event, testmode=False)
++    assert 'can not be used' in excinfo.value.message
++    validate_memberships_in_order(customer, [cp1], event, testmode=True)
++
++
++@pytest.mark.django_db
++def test_validate_memberships_canceled(event, customer, membership, requiring_ticket):
++    membership.canceled = True
++    membership.save()
++    cp1 = _cart_position(event, requiring_ticket, membership)
++    with pytest.raises(ValidationError) as excinfo:
++        validate_memberships_in_order(customer, [cp1], event)
++    assert 'not valid' in excinfo.value.message
++
++
++@pytest.mark.django_db
++def test_validate_memberships_not_valid_on_event_date(event, customer, membership, requiring_ticket):
++    membership.date_start -= timedelta(days=100)
++    membership.date_end -= timedelta(days=100)
++    membership.save()
++    cp1 = _cart_position(event, requiring_ticket, membership)
++    with pytest.raises(ValidationError) as excinfo:
++        validate_memberships_in_order(customer, [cp1], event)
++    assert 'not valid' in excinfo.value.message
++
++
++@pytest.mark.django_db
++def test_validate_memberships_max_usages_within_cart(event, customer, membership, membership_type, requiring_ticket):
++    membership_type.max_usages = 1
++    membership_type.save()
++    cp1 = _cart_position(event, requiring_ticket, membership)
++    cp2 = _cart_position(event, requiring_ticket, membership)
++    with pytest.raises(ValidationError) as excinfo:
++        validate_memberships_in_order(customer, [cp1, cp2], event, lock=True)
++    assert 'usages' in excinfo.value.message
++    validate_memberships_in_order(customer, [cp1], event, lock=True)
++
++
++@pytest.mark.django_db
++def test_validate_memberships_max_usages_existing_order(event, customer, membership, membership_type, requiring_ticket):
++    membership_type.max_usages = 1
++    membership_type.save()
++    q = event.quotas.create(size=None, name="foo")
++    q.items.add(requiring_ticket)
++    cp1 = _cart_position(event, requiring_ticket, membership)
++    order = _create_order(event, email='dummy@example.org', positions=[cp1],
++                          now_dt=now(),
++                          sales_channel=event.organizer.sales_channels.get(identifier="web"),
++                          payment_requests=[{
++                              "id": "test0",
++                              "provider": "banktransfer",
++                              "max_value": None,
++                              "min_value": None,
++                              "multi_use_supported": False,
++                              "info_data": {},
++                              "pprov": BankTransfer(event),
++                              "payment_amount": Decimal("23.00"),
++                          }],
++                          locale='de', customer=customer)[0]
++    cp2 = _cart_position(event, requiring_ticket, membership, cart_id="456")
++    with pytest.raises(ValidationError) as excinfo:
++        validate_memberships_in_order(customer, [cp2], event)
++    assert 'usages' in excinfo.value.message
++    validate_memberships_in_order(customer, [cp2], event, ignored_order=order)

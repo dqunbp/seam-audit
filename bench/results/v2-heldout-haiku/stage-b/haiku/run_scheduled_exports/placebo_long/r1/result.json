@@ -1,0 +1,70 @@
+{
+  "run_id": "haiku/run_scheduled_exports/placebo_long/r1",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "run_scheduled_exports",
+  "condition": "placebo_long",
+  "rep": 1,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 117.9,
+  "cost_usd": 0.027746060000000003,
+  "num_turns": 25,
+  "duration_s": 115.2,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 17,
+    "Edit": 4,
+    "Read": 1
+  },
+  "files_read": [
+    "src/tests/base/test_export.py"
+  ],
+  "skills_invoked": [
+    "careful-dev"
+  ],
+  "bash_commands": [
+    "git status --short | head && cat src/pretix/base/services/export.py && grep -rn \"periodic_task\\|@app.task\\|scheduled\" src/pretix/base/services/tasks.py src/pretix/base/models/*.py | head -60",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-stageB/haiku/run_scheduled_exports/placebo_long/r1/repo/src && sed -n 90,200p pretix/base/models/exports.py; grep -rn \"periodic_task\" --include=*.py pretix | grep -v tests | head -30",
+    "sed -n 60,90p pretix/base/models/exports.py; sed -n 670,760p pretix/base/services/invoices.py; sed -n 160,200p pretix/base/services/waitinglist.py; cd .. && git log --oneline | head -5; git log --all --oneline -S run_scheduled_exports | head",
+    "sed -n 60,90p pretix/base/models/exports.py; sed -n 670,760p pretix/base/services/invoices.py; sed -n 160,200p pretix/base/services/waitinglist.py",
+    "grep -rn \"scheduled_event_export\\|scheduled_organizer_export\\|schedule_next_run\\|compute_next_run\\|run_scheduled_exports\" --include=*.py . | grep -v \"^./pretix/base/services/export.py\" | head -40; grep -n \"class EventTask\\|class OrganizerTask\\|def apply_async\\|def __call__\" -A12 pretix/base/services/tasks.py | head -80",
+    "sed -n 3025,3040p pretix/control/views/orders.py; sed -n 2328,2340p pretix/control/views/organizer.py; sed -n 1095,1160p pretix/base/services/mail.py | head -70; ls tests/base | grep -i export",
+    "sed -n 1,80p tests/base/test_export.py; grep -n \"^def \\|^class \\|scheduled\" tests/base/test_export.py | head -80; grep -n \"periodic_task\" -B2 -A3 pretix/base/signals.py | head; grep -rn \"periodic_task.send\" --include=*.py pretix | head -3",
+    "wc -l tests/base/test_export.py && sed -n 80,120p tests/base/test_export.py && grep -n \"def test\" tests/base/test_export.py | wc -l && git -C .. log --oneline -3 2>/dev/null | cat",
+    "wc -l tests/base/test_export.py && sed -n 80,120p tests/base/test_export.py && grep -c \"def test\" tests/base/test_export.py",
+    "grep -n \"ScheduledEventExport.objects.create\\|ScheduledOrganizerExport.objects.create\" -A16 tests/api/test_exporters.py | head -60; grep -n \"def event_scheduled_export\\|def organizer_scheduled\" -A20 tests/api/test_exporters.py | head -50",
+    "cat >> tests/base/test_export.py <<'EOF'\n\n\nFROZEN_NOW = datetime(2023, 1, 20, 12, 0, 0, tzinfo=timezone.utc)\n\n\n@pytest.fixture\ndef event_schedule(event, user):\n    return event.scheduled_exports.create(\n        owner=user,\n        export_identifier=\"orderlist\",\n        export_form_data={\"_format\": \"xlsx\"},\n        locale=\"en\",\n        mail_subject=\"Order list\",\n        mail_template=\"Here is the order list\",\n        schedule_rrule=\"DTSTART:20230118T000000\\nRRULE:FREQ=DAILY;INTERVAL=1;WKST=MO\",\n        schedule_rrule_time=time(2, 30, 0),\n    )\n\n\n@pytest.fixture\ndef organizer_schedule(event, user):\n    return event.organizer.scheduled_exports.create(\n        owner=user,\n        export_identifier=\"giftcardlist\",\n        export_form_data={\"_format\": \"xlsx\"},\n        locale=\"en\",\n        mail_subject=\"Gift card list\",\n        mail_template=\"Here is the gift card list\",\n        schedule_rrule=\"DTSTART:20230118T000000\\nRRULE:FREQ=DAILY;INTERVAL=1;WKST=MO\",\n        schedule_rrule_time=time(2, 30, 0),\n    )\n\n\n@pytest.mark.django_db\ndef test_run_scheduled_exports_queues_due_event_export(event, event_schedule):\n    with freeze_time(FROZEN_NOW):\n        event_schedule.schedule_next_run = now() - timedelta(minutes=1)\n        event_schedule.save()\n\n        with mock.patch.object(scheduled_event_export, 'apply_async') as apply_async:\n            run_scheduled_exports(None)\n\n        apply_async.assert_called_once_with(kwargs={'event': event.pk, 'schedule': event_schedule.pk})\n        event_schedule.refresh_from_db()\n        assert event_schedule.schedule_next_run > now()\n\n\n@pytest.mark.django_db\ndef test_run_scheduled_exports_queues_due_organizer_export(event, organizer_schedule):\n    with freeze_time(FROZEN_NOW):\n        organizer_schedule.schedule_next_run = now() - timedelta(minutes=1)\n        organizer_schedule.save()\n\n        with mock.patch.object(scheduled_organizer_export, 'apply_async') as apply_async:\n            run_scheduled_exports(None)\n\n        apply_async.assert_called_once_with(\n            kwargs={'organizer': event.organizer.pk, 'schedule': organizer_schedule.pk}\n        )\n        organizer_schedule.refresh_from_db()\n        assert organizer_schedule.schedule_next_run > now()\n\n\n@pytest.mark.django_db\ndef test_run_scheduled_exports_skips_schedules_not_yet_due(event, event_schedule, organizer_schedule):\n    with freeze_time(FROZEN_NOW):\n        future = now() + timedelta(hours=1)\n        event_schedule.schedule_next_run = future\n        event_schedule.save()\n        organizer_schedule.schedule_next_run = future\n        organizer_schedule.save()\n\n        with mock.patch.object(scheduled_event_export, 'apply_async') as event_apply_async, \\\n                mock.patch.object(scheduled_organizer_export, 'apply_async') as organizer_apply_async:\n            run_scheduled_exports(None)\n\n        event_apply_async.assert_not_called()\n        organizer_apply_async.assert_not_called()\n        event_schedule.refresh_from_db()\n        organizer_schedule.refresh_from_db()\n        assert event_schedule.schedule_next_run == future\n        assert organizer_schedule.schedule_next_run == future\n\n\n@pytest.mark.django_db\ndef test_run_scheduled_exports_skips_schedules_without_next_run(event, event_schedule, organizer_schedule):\n    with freeze_time(FROZEN_NOW):\n        assert event_schedule.schedule_next_run is None\n        assert organizer_schedule.schedule_next_run is None\n\n        with mock.patch.object(scheduled_event_export, 'apply_async') as event_apply_async, \\\n                mock.patch.object(scheduled_organizer_export, 'apply_async') as organizer_apply_async:\n            run_scheduled_exports(None)\n\n        event_apply_async.assert_not_called()\n        organizer_apply_async.assert_not_called()\n\n\n@pytest.mark.django_db\ndef test_run_scheduled_exports_does_not_queue_same_schedule_twice(event, event_schedule, organizer_schedule):\n    with freeze_time(FROZEN_NOW):\n        event_schedule.schedule_next_run = now() - timedelta(minutes=1)\n        event_schedule.save()\n        organizer_schedule.schedule_next_run = now() - timedelta(minutes=1)\n        organizer_schedule.save()\n\n        with mock.patch.object(scheduled_event_export, 'apply_async') as event_apply_async, \\\n                mock.patch.object(scheduled_organizer_export, 'apply_async') as organizer_apply_async:\n            run_scheduled_exports(None)\n            run_scheduled_exports(None)\n\n        event_apply_async.assert_called_once()\n        organizer_apply_async.assert_called_once()\nEOF\npython - <<'EOF'\nimport re\np='tests/base/test_export.py'\ns=open(p).read()\ns=s.replace(\"from datetime import datetime, time, timedelta, timezone\\n\\nimport pytest\",\n\"from datetime import datetime, time, timedelta, timezone\\nfrom unittest import mock\\n\\nimport pytest\",1)\ns=s.replace(\"    Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,\\n)\\n\",\n\"    Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,\\n)\\nfrom pretix.base.services.export import (\\n    run_scheduled_exports, scheduled_event_export, scheduled_organizer_export,\\n)\\n\",1)\nopen(p,'w').write(s)\nEOF\ntimeout 900 python -m pytest tests/base/test_export.py -q -p no:cacheprovider 2>&1 | tail -30",
+    "timeout 900 python -m pytest tests/base/test_export.py -q -p no:cacheprovider 2>&1 | tail -30; python -m flake8 pretix/base/services/export.py tests/base/test_export.py; python -m isort -c pretix/base/services/export.py tests/base/test_export.py",
+    "timeout 900 python -m pytest tests/base/test_export.py -q -p no:cacheprovider",
+    "python -m flake8 pretix/base/services/export.py tests/base/test_export.py && python -m isort -c pretix/base/services/export.py tests/base/test_export.py && echo LINT_OK",
+    "python -m flake8 pretix/base/services/export.py tests/base/test_export.py",
+    "python -m isort -c pretix/base/services/export.py tests/base/test_export.py",
+    "timeout 900 python -m pytest tests/api/test_exporters.py -q -p no:cacheprovider -k \"schedule\" 2>&1 | tail -5"
+  ],
+  "seam_table": false,
+  "output_chars": 4241,
+  "hidden": {
+    "base.test_export::test_event_run_sets_new_time": true,
+    "base.test_export::test_event_not_run_when_failed_5_times": false,
+    "base.test_export::test_event_fail_invalid_config": true,
+    "base.test_export::test_event_fail_user_inactive": true,
+    "base.test_export::test_event_fail_user_no_permission": true,
+    "base.test_export::test_organizer_run_sets_new_time": true,
+    "base.test_export::test_organizer_not_run_when_failed_5_times": false,
+    "base.test_export::test_organizer_fail_invalid_config": true,
+    "base.test_export::test_organizer_fail_user_inactive": true,
+    "base.test_export::test_organizer_fail_user_does_not_have_specific_permission": true,
+    "base.test_export::test_event_ok": true,
+    "base.test_export::test_organizer_limited_to_events": true,
+    "base.test_export::test_organizer_ok": true
+  },
+  "hidden_passed": 11,
+  "hidden_total": 13,
+  "visible_green": true,
+  "visible_passed": 5,
+  "visible_total": 5,
+  "diff_lines": 152
+}

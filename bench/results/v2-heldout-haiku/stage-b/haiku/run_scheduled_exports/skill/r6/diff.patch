@@ -1,0 +1,147 @@
+diff --git a/src/pretix/base/services/export.py b/src/pretix/base/services/export.py
+index 493bf71..3e8a0c9 100644
+--- a/src/pretix/base/services/export.py
++++ b/src/pretix/base/services/export.py
+@@ -494,3 +494,38 @@ def scheduled_event_export(self, event: Event, schedule: int) -> None:
+     )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def run_scheduled_exports(sender, **kwargs):
++    """
++    Find all scheduled exports (event-level and organizer-level) that are due, advance their next run time and
++    enqueue the task that actually executes them. The next run time is advanced in the same transaction that
++    locks the row, so a schedule can't be dispatched twice by concurrent runs of this job.
++    """
++    dispatch = []
++    with transaction.atomic():
++        for schedule in ScheduledEventExport.objects.filter(
++            schedule_next_run__lte=now(),
++        ).select_for_update(of=OF_SELF, skip_locked=connection.features.has_select_for_update_skip_locked):
++            schedule.compute_next_run()
++            schedule.save(update_fields=['schedule_next_run'])
++            dispatch.append((scheduled_event_export, {'event': schedule.event_id, 'schedule': schedule.pk}))
++
++        for schedule in ScheduledOrganizerExport.objects.filter(
++            schedule_next_run__lte=now(),
++        ).select_for_update(of=OF_SELF, skip_locked=connection.features.has_select_for_update_skip_locked):
++            schedule.compute_next_run()
++            schedule.save(update_fields=['schedule_next_run'])
++            dispatch.append((scheduled_organizer_export, {
++                'organizer': schedule.organizer_id,
++                'schedule': schedule.pk,
++            }))
++
++    # Enqueue only after commit, so the task never runs before the advanced schedule is visible.
++    for task, kwargs in dispatch:
++        try:
++            task.apply_async(kwargs=kwargs)
++        except Exception:
++            logger.exception(f"Could not enqueue scheduled export {kwargs}.")
++
++
+diff --git a/src/tests/base/test_export.py b/src/tests/base/test_export.py
+index 8ed4054..7e3008c 100644
+--- a/src/tests/base/test_export.py
++++ b/src/tests/base/test_export.py
+@@ -20,6 +20,7 @@
+ # <https://www.gnu.org/licenses/>.
+ #
+ from datetime import datetime, time, timedelta, timezone
++from unittest import mock
+ 
+ import pytest
+ from django.core import mail as djmail
+@@ -30,6 +31,7 @@ from freezegun import freeze_time
+ from pretix.base.models import (
+     Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,
+ )
++from pretix.base.services.export import run_scheduled_exports
+ 
+ 
+ @pytest.fixture(scope='function')
+@@ -57,3 +59,83 @@ def user(team):
+     return user
+ 
+ 
++def _schedule_fields(owner, next_run):
++    return dict(
++        export_identifier='orderlist',
++        export_form_data={},
++        owner=owner,
++        locale='en',
++        mail_subject='Export',
++        mail_template='Hello',
++        schedule_rrule="DTSTART:20230118T000000\nRRULE:FREQ=DAILY;INTERVAL=1;WKST=MO",
++        schedule_rrule_time=time(6, 30, 0),
++        schedule_next_run=next_run,
++    )
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_dispatches_due_event_export(event, user):
++    due = ScheduledEventExport.objects.create(event=event, **_schedule_fields(user, now() - timedelta(minutes=1)))
++    later = now() + timedelta(hours=1)
++    not_due = ScheduledEventExport.objects.create(event=event, **_schedule_fields(user, later))
++
++    with mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as apply:
++        run_scheduled_exports(sender=None)
++
++    apply.assert_called_once_with(kwargs={'event': event.pk, 'schedule': due.pk})
++    due.refresh_from_db()
++    assert due.schedule_next_run > now()
++    not_due.refresh_from_db()
++    assert not_due.schedule_next_run == later
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_dispatches_due_organizer_export(event, user):
++    organizer = event.organizer
++    due = ScheduledOrganizerExport.objects.create(
++        organizer=organizer, timezone='Europe/Berlin', **_schedule_fields(user, now() - timedelta(minutes=1))
++    )
++    later = now() + timedelta(hours=1)
++    not_due = ScheduledOrganizerExport.objects.create(
++        organizer=organizer, timezone='Europe/Berlin', **_schedule_fields(user, later)
++    )
++
++    with mock.patch('pretix.base.services.export.scheduled_organizer_export.apply_async') as apply:
++        run_scheduled_exports(sender=None)
++
++    apply.assert_called_once_with(kwargs={'organizer': organizer.pk, 'schedule': due.pk})
++    due.refresh_from_db()
++    assert due.schedule_next_run > now()
++    not_due.refresh_from_db()
++    assert not_due.schedule_next_run == later
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_does_not_dispatch_twice(event, user):
++    ScheduledEventExport.objects.create(event=event, **_schedule_fields(user, now() - timedelta(minutes=1)))
++
++    with mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as apply:
++        run_scheduled_exports(sender=None)
++        run_scheduled_exports(sender=None)
++
++    assert apply.call_count == 1
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_runs_once_when_rule_is_exhausted(event, user):
++    schedule = ScheduledEventExport.objects.create(
++        event=event,
++        **_schedule_fields(user, now() - timedelta(minutes=1)),
++    )
++    schedule.schedule_rrule = "DTSTART:20230118T000000\nRRULE:FREQ=DAILY;COUNT=1;INTERVAL=1;WKST=MO"
++    schedule.save(update_fields=['schedule_rrule'])
++
++    with mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as apply:
++        run_scheduled_exports(sender=None)
++        run_scheduled_exports(sender=None)
++
++    apply.assert_called_once_with(kwargs={'event': event.pk, 'schedule': schedule.pk})
++    schedule.refresh_from_db()
++    assert schedule.schedule_next_run is None
++
++

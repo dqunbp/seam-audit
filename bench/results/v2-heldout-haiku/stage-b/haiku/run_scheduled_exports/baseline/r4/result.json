@@ -1,0 +1,62 @@
+{
+  "run_id": "haiku/run_scheduled_exports/baseline/r4",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "run_scheduled_exports",
+  "condition": "baseline",
+  "rep": 4,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 98.2,
+  "cost_usd": 0.024182720000000005,
+  "num_turns": 22,
+  "duration_s": 95.5,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Bash": 5,
+    "Read": 9,
+    "Grep": 4,
+    "Edit": 3
+  },
+  "files_read": [
+    "src/pretix/base/models/exports.py",
+    "src/pretix/base/services/export.py",
+    "src/pretix/base/services/invoices.py",
+    "src/pretix/control/views/orders.py",
+    "src/pretix/control/views/organizer.py",
+    "src/pretix/helpers/periodic.py",
+    "src/tests/base/test_export.py"
+  ],
+  "skills_invoked": [],
+  "bash_commands": [
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-stageB/haiku/run_scheduled_exports/baseline/r4/repo 2>/dev/null || cd /tmp/claude-0/-tmp-claude-0--home-user-seam-audit-4d868dbd-76d3-5c3d-a30c-fa647d6d00e0-scratchpad-runs-stageB-haiku-run-scheduled-exports-baseline-r4-repo/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad; pwd; git status | head -5; cat src/pretix/base/services/export.py; grep -rn \"ScheduledExport\\|scheduled_export\\|ScheduledEventExport\\|ScheduledOrganizerExport\" src --include=*.py | grep -v migrations | head -60",
+    "pwd; ls; git -C /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-stageB/haiku/run_scheduled_exports/baseline/r4/repo status | head -5",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-stageB/haiku/run_scheduled_exports/baseline/r4/repo/src && python -m pytest tests/base/test_export.py -q -p no:cacheprovider 2>&1 | tail -30",
+    "python -m flake8 pretix/base/services/export.py tests/base/test_export.py 2>&1 | tail -10; python -m isort --check-only --diff pretix/base/services/export.py tests/base/test_export.py 2>&1 | tail -10",
+    "python -m flake8 pretix/base/services/export.py tests/base/test_export.py"
+  ],
+  "seam_table": false,
+  "output_chars": 1528,
+  "hidden": {
+    "base.test_export::test_event_run_sets_new_time": true,
+    "base.test_export::test_event_not_run_when_failed_5_times": false,
+    "base.test_export::test_event_fail_invalid_config": true,
+    "base.test_export::test_event_fail_user_inactive": true,
+    "base.test_export::test_event_fail_user_no_permission": true,
+    "base.test_export::test_organizer_run_sets_new_time": true,
+    "base.test_export::test_organizer_not_run_when_failed_5_times": false,
+    "base.test_export::test_organizer_fail_invalid_config": true,
+    "base.test_export::test_organizer_fail_user_inactive": true,
+    "base.test_export::test_organizer_fail_user_does_not_have_specific_permission": true,
+    "base.test_export::test_event_ok": true,
+    "base.test_export::test_organizer_limited_to_events": true,
+    "base.test_export::test_organizer_ok": true
+  },
+  "hidden_passed": 11,
+  "hidden_total": 13,
+  "visible_green": true,
+  "visible_passed": 5,
+  "visible_total": 5,
+  "diff_lines": 119
+}

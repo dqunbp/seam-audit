@@ -1,0 +1,197 @@
+diff --git a/src/pretix/base/services/export.py b/src/pretix/base/services/export.py
+index 493bf71..1088a8e 100644
+--- a/src/pretix/base/services/export.py
++++ b/src/pretix/base/services/export.py
+@@ -467,6 +467,53 @@ def scheduled_organizer_export(self, organizer: Organizer, schedule: int) -> Non
+     )
+ 
+ 
++def _claim_due_scheduled_exports(model, select_related=None):
++    # Advance every due schedule to its next occurrence inside one transaction. Once this is committed, a repeated
++    # or concurrent run of the periodic job will no longer see the occurrence as due, so it is dispatched at most once.
++    claimed = []
++    with transaction.atomic():
++        qs = model.objects.filter(
++            schedule_rrule__isnull=False,
++            schedule_next_run__isnull=False,
++            schedule_next_run__lte=now(),
++        )
++        if select_related:
++            qs = qs.select_related(select_related)
++        qs = qs.select_for_update(of=OF_SELF, skip_locked=connection.features.has_select_for_update_skip_locked)
++        for schedule in qs:
++            schedule.compute_next_run()
++            schedule.save(update_fields=['schedule_next_run'])
++            claimed.append(schedule)
++    return claimed
++
++
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def run_scheduled_exports(sender, **kwargs):
++    for schedule in _claim_due_scheduled_exports(ScheduledEventExport, select_related='event'):
++        try:
++            scheduled_event_export.apply_async(
++                kwargs={
++                    'event': schedule.event_id,
++                    'schedule': schedule.pk,
++                },
++            )
++        except Exception:
++            # The occurrence has already been advanced, so it is not retried. Log it and carry on with the others.
++            logger.exception(f"Could not dispatch scheduled event export {schedule.pk}.")
++
++    for schedule in _claim_due_scheduled_exports(ScheduledOrganizerExport):
++        try:
++            scheduled_organizer_export.apply_async(
++                kwargs={
++                    'organizer': schedule.organizer_id,
++                    'schedule': schedule.pk,
++                },
++            )
++        except Exception:
++            logger.exception(f"Could not dispatch scheduled organizer export {schedule.pk}.")
++
++
+ @app.task(base=EventTask, bind=True, max_retries=5, default_retry_delay=120)
+ def scheduled_event_export(self, event: Event, schedule: int) -> None:
+     schedule = event.scheduled_exports.get(pk=schedule)
+diff --git a/src/tests/base/test_export.py b/src/tests/base/test_export.py
+index 8ed4054..31dc3ef 100644
+--- a/src/tests/base/test_export.py
++++ b/src/tests/base/test_export.py
+@@ -20,6 +20,7 @@
+ # <https://www.gnu.org/licenses/>.
+ #
+ from datetime import datetime, time, timedelta, timezone
++from unittest import mock
+ 
+ import pytest
+ from django.core import mail as djmail
+@@ -30,6 +31,11 @@ from freezegun import freeze_time
+ from pretix.base.models import (
+     Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,
+ )
++from pretix.base.services.export import (
++    run_scheduled_exports, scheduled_event_export, scheduled_organizer_export,
++)
++
++pytestmark = pytest.mark.django_db
+ 
+ 
+ @pytest.fixture(scope='function')
+@@ -57,3 +63,114 @@ def user(team):
+     return user
+ 
+ 
++@pytest.fixture
++def event_schedule(event, user):
++    return event.scheduled_exports.create(
++        owner=user,
++        export_identifier='itemdata',
++        export_form_data={'_format': 'default'},
++        locale='en',
++        mail_subject='Scheduled export',
++        mail_template='Mail body',
++        schedule_rrule='DTSTART:20230119T000000\nRRULE:FREQ=DAILY',
++        schedule_rrule_time=time(3, 30),
++        schedule_next_run=now() - timedelta(hours=1),
++    )
++
++
++@pytest.fixture
++def organizer_schedule(event, user):
++    return event.organizer.scheduled_exports.create(
++        owner=user,
++        export_identifier='giftcardlist',
++        export_form_data={'_format': 'default'},
++        locale='en',
++        mail_subject='Scheduled organizer export',
++        mail_template='Mail body',
++        schedule_rrule='DTSTART:20230119T000000\nRRULE:FREQ=DAILY',
++        schedule_rrule_time=time(3, 30),
++        timezone='Europe/Berlin',
++        schedule_next_run=now() - timedelta(hours=1),
++    )
++
++
++def test_run_scheduled_exports_dispatches_due_event_export(event_schedule):
++    with mock.patch.object(scheduled_event_export, 'apply_async') as apply_async:
++        run_scheduled_exports(sender=None)
++    apply_async.assert_called_once_with(
++        kwargs={'event': event_schedule.event_id, 'schedule': event_schedule.pk},
++    )
++    event_schedule.refresh_from_db()
++    assert event_schedule.schedule_next_run > now()
++
++
++def test_run_scheduled_exports_dispatches_due_organizer_export(organizer_schedule):
++    with mock.patch.object(scheduled_organizer_export, 'apply_async') as apply_async:
++        run_scheduled_exports(sender=None)
++    apply_async.assert_called_once_with(
++        kwargs={'organizer': organizer_schedule.organizer_id, 'schedule': organizer_schedule.pk},
++    )
++    organizer_schedule.refresh_from_db()
++    assert organizer_schedule.schedule_next_run > now()
++
++
++def test_run_scheduled_exports_skips_schedules_not_due(event_schedule, organizer_schedule):
++    future = now() + timedelta(hours=1)
++    ScheduledEventExport.objects.filter(pk=event_schedule.pk).update(schedule_next_run=future)
++    ScheduledOrganizerExport.objects.filter(pk=organizer_schedule.pk).update(schedule_next_run=future)
++    with mock.patch.object(scheduled_event_export, 'apply_async') as event_apply_async, \
++            mock.patch.object(scheduled_organizer_export, 'apply_async') as organizer_apply_async:
++        run_scheduled_exports(sender=None)
++    event_apply_async.assert_not_called()
++    organizer_apply_async.assert_not_called()
++    event_schedule.refresh_from_db()
++    organizer_schedule.refresh_from_db()
++    assert event_schedule.schedule_next_run == future
++    assert organizer_schedule.schedule_next_run == future
++
++
++def test_run_scheduled_exports_skips_schedules_without_next_run(event_schedule):
++    ScheduledEventExport.objects.filter(pk=event_schedule.pk).update(schedule_next_run=None)
++    with mock.patch.object(scheduled_event_export, 'apply_async') as apply_async:
++        run_scheduled_exports(sender=None)
++    apply_async.assert_not_called()
++
++
++def test_run_scheduled_exports_dispatches_each_occurrence_once(event_schedule, organizer_schedule):
++    with mock.patch.object(scheduled_event_export, 'apply_async') as event_apply_async, \
++            mock.patch.object(scheduled_organizer_export, 'apply_async') as organizer_apply_async:
++        run_scheduled_exports(sender=None)
++        run_scheduled_exports(sender=None)
++    assert event_apply_async.call_count == 1
++    assert organizer_apply_async.call_count == 1
++
++
++def test_run_scheduled_exports_dispatches_last_occurrence_and_clears_next_run(event_schedule):
++    ScheduledEventExport.objects.filter(pk=event_schedule.pk).update(
++        schedule_rrule='DTSTART:20230119T000000\nRRULE:FREQ=DAILY;COUNT=1',
++    )
++    with mock.patch.object(scheduled_event_export, 'apply_async') as apply_async:
++        run_scheduled_exports(sender=None)
++    apply_async.assert_called_once()
++    event_schedule.refresh_from_db()
++    assert event_schedule.schedule_next_run is None
++
++
++def test_run_scheduled_exports_continues_after_dispatch_error(event_schedule, organizer_schedule):
++    with mock.patch.object(scheduled_event_export, 'apply_async', side_effect=Exception('broker down')), \
++            mock.patch.object(scheduled_organizer_export, 'apply_async') as organizer_apply_async:
++        run_scheduled_exports(sender=None)
++    organizer_apply_async.assert_called_once()
++
++
++def test_run_scheduled_exports_sends_event_export_end_to_end(event_schedule):
++    djmail.outbox = []
++    run_scheduled_exports(sender=None)
++    assert len(djmail.outbox) == 1
++    assert djmail.outbox[0].subject == 'Scheduled export'
++    assert djmail.outbox[0].to == ['dummy@dummy.dummy']
++    assert len(djmail.outbox[0].attachments) == 1
++    event_schedule.refresh_from_db()
++    assert event_schedule.error_counter == 0
++
++

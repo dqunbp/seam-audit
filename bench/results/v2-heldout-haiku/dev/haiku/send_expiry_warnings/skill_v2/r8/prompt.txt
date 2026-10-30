@@ -1,0 +1,7 @@
+This is pretix, an event ticketing system (Django). Customers with an unpaid order are supposed to get a reminder e-mail a configurable number of days before their payment deadline (the event setting `mail_days_order_expire_warning`, part of the e-mail settings in the control panel). The periodic job that sends these reminders is missing, so nobody gets them.
+
+Implement it as `send_expiry_warnings(sender, **kwargs)` in `src/pretix/base/services/orders.py`, run by pretix's periodic task mechanism in the same way as the other periodic jobs.
+
+Add tests for it. The development environment is installed: run tests from `src/` with `python -m pytest <test files>` (the full suite is very slow, so run the relevant test files).
+
+Before you start, use the `seam-audit` skill.

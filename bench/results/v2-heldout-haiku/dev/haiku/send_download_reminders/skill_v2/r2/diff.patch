@@ -1,0 +1,280 @@
+diff --git a/src/pretix/base/services/orders.py b/src/pretix/base/services/orders.py
+index 072a969..58f57ca 100644
+--- a/src/pretix/base/services/orders.py
++++ b/src/pretix/base/services/orders.py
+@@ -1516,6 +1516,79 @@ def send_expiry_warnings(sender, **kwargs):
+                     )
+ 
+ 
++def _download_reminder_due(order: Order, days: int) -> bool:
++    # Mirrors the reminder date shown in the event timeline: days before the start of the event, or of the
++    # earliest subevent the order has positions for (like ``Order.ticket_download_date``).
++    if order.event.has_subevents:
++        starts = list(order.positions.filter(subevent__isnull=False).values_list('subevent__date_from', flat=True))
++        event_start = min(starts) if starts else None
++    else:
++        event_start = order.event.date_from
++
++    if event_start is None or event_start <= now():
++        # Never send reminders for events that already started
++        return False
++
++    tz = order.event.timezone
++    return now().astimezone(tz).date() >= event_start.astimezone(tz).date() - timedelta(days=days)
++
++
++@receiver(signal=periodic_task)
++@scopes_disabled()
++@minimum_interval(minutes_after_success=60)
++def send_download_reminders(sender, **kwargs):
++    days = None
++    settings = None
++    event_id = None
++
++    for o in Order.objects.filter(
++            status__in=[Order.STATUS_PAID, Order.STATUS_PENDING],
++            download_reminder_sent=False,
++    ).select_related('event', 'sales_channel').order_by('event_id'):
++
++        if event_id != o.event_id:
++            settings = o.event.settings
++            days = settings.get('mail_days_download_reminder', as_type=int)
++            event_id = o.event_id
++
++        if days is None or not o.ticket_download_available:
++            continue
++        if o.sales_channel.identifier not in settings.mail_sales_channel_download_reminder:
++            continue
++        if not _download_reminder_due(o, days):
++            continue
++
++        with transaction.atomic():
++            o = Order.objects.select_related('event').select_for_update(of=OF_SELF).get(pk=o.pk)
++            if o.status not in (Order.STATUS_PAID, Order.STATUS_PENDING) or o.download_reminder_sent:
++                # Race condition
++                continue
++            if not o.ticket_download_available:
++                continue
++
++            with language(o.locale, settings.region):
++                o.download_reminder_sent = True
++                o.save(update_fields=['download_reminder_sent'])
++                email_context = get_email_context(event=o.event, order=o)
++                o.send_mail(
++                    settings.mail_subject_download_reminder, settings.mail_text_download_reminder, email_context,
++                    'pretix.event.order.email.download_reminder_sent',
++                    attach_tickets=True,
++                )
++
++                if settings.mail_send_download_reminder_attendee:
++                    for p in o.positions.all():
++                        if p.addon_to_id is None and p.attendee_email and p.attendee_email != o.email:
++                            email_context = get_email_context(event=o.event, order=o, position=p)
++                            p.send_mail(
++                                settings.mail_subject_download_reminder_attendee,
++                                settings.mail_text_download_reminder_attendee,
++                                email_context,
++                                'pretix.event.order.email.download_reminder_sent',
++                                attach_tickets=True,
++                            )
++
++
+ def notify_user_changed_order(order, user=None, auth=None, invoices=[]):
+     with language(order.locale, order.event.settings.region):
+         email_template = order.event.settings.mail_text_order_changed
+diff --git a/src/tests/base/test_orders.py b/src/tests/base/test_orders.py
+index a004b9a..c890764 100644
+--- a/src/tests/base/test_orders.py
++++ b/src/tests/base/test_orders.py
+@@ -43,6 +43,7 @@ from pretix.base.models import (
+     CartPosition, Event, GiftCard, Invoice, InvoiceAddress, Item, Order,
+     OrderPosition, Organizer, SeatingPlan,
+ )
++from pretix.base.models.event import SubEvent
+ from pretix.base.models.items import SubEventItem
+ from pretix.base.models.orders import OrderFee, OrderPayment, OrderRefund
+ from pretix.base.payment import (
+@@ -55,7 +56,8 @@ from pretix.base.services.invoices import (
+ )
+ from pretix.base.services.orders import (
+     OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,
+-    deny_order, expire_orders, reactivate_order, send_expiry_warnings,
++    deny_order, expire_orders, reactivate_order, send_download_reminders,
++    send_expiry_warnings,
+ )
+ from pretix.plugins.banktransfer.payment import BankTransfer
+ from pretix.testutils.mock import mocker_context
+@@ -1010,6 +1012,173 @@ class PaymentReminderTests(TestCase):
+         assert len(djmail.outbox) == 0
+ 
+ 
++class DownloadReminderTests(TestCase):
++    def setUp(self):
++        super().setUp()
++        self.o = Organizer.objects.create(name='Dummy', slug='dummy')
++        with scope(organizer=self.o):
++            self.event = Event.objects.create(
++                organizer=self.o, name='Dummy', slug='dummy',
++                date_from=now() + timedelta(days=2),
++            )
++            self.event.settings.ticket_download = True
++            self.ticket = Item.objects.create(event=self.event, name='Ticket',
++                                              default_price=Decimal('23.00'), admission=True)
++            self.order = self._create_order('FOO')
++            self.op1 = OrderPosition.objects.create(
++                order=self.order, item=self.ticket, variation=None,
++                price=Decimal("23.00"), attendee_name_parts={'full_name': "Peter"}, positionid=1
++            )
++            djmail.outbox = []
++
++    def _create_order(self, code, status=Order.STATUS_PAID, event=None):
++        event = event or self.event
++        return Order.objects.create(
++            code=code, event=event, email='dummy@dummy.test',
++            status=status, locale='en',
++            datetime=now() - timedelta(hours=4),
++            expires=now() + timedelta(days=10),
++            total=Decimal('23.00'),
++            sales_channel=self.o.sales_channels.get(identifier="web"),
++        )
++
++    @classscope(attr='o')
++    def test_disabled(self):
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++    @classscope(attr='o')
++    def test_sent_once(self):
++        self.event.settings.mail_days_download_reminder = 2
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 1
++        self.order.refresh_from_db()
++        assert self.order.download_reminder_sent
++
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 1
++
++    @classscope(attr='o')
++    def test_not_yet_due(self):
++        self.event.settings.mail_days_download_reminder = 1
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 0
++        self.order.refresh_from_db()
++        assert not self.order.download_reminder_sent
++
++    @classscope(attr='o')
++    def test_event_already_started(self):
++        self.event.date_from = now() - timedelta(hours=1)
++        self.event.save()
++        self.event.settings.mail_days_download_reminder = 2
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++    @classscope(attr='o')
++    def test_ticket_download_disabled(self):
++        self.event.settings.ticket_download = False
++        self.event.settings.mail_days_download_reminder = 2
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++    @classscope(attr='o')
++    def test_pending_order_without_ticket_download(self):
++        self.event.settings.mail_days_download_reminder = 2
++        self.order.status = Order.STATUS_PENDING
++        self.order.save()
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++    @classscope(attr='o')
++    def test_pending_order_with_ticket_download_pending(self):
++        self.event.settings.mail_days_download_reminder = 2
++        self.event.settings.ticket_download_pending = True
++        self.order.status = Order.STATUS_PENDING
++        self.order.save()
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 1
++
++    @classscope(attr='o')
++    def test_canceled_order(self):
++        self.event.settings.mail_days_download_reminder = 2
++        self.order.status = Order.STATUS_CANCELED
++        self.order.save()
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++    @classscope(attr='o')
++    def test_sales_channel_not_selected(self):
++        self.event.settings.mail_days_download_reminder = 2
++        self.event.settings.mail_sales_channel_download_reminder = ['pretixpos']
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++    @classscope(attr='o')
++    def test_attendees_get_mail_when_enabled(self):
++        self.event.settings.mail_days_download_reminder = 2
++        self.event.settings.mail_send_download_reminder_attendee = True
++        self.op1.attendee_email = 'attendee@dummy.test'
++        self.op1.save()
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 2
++        assert djmail.outbox[1].to == ['attendee@dummy.test']
++
++    @classscope(attr='o')
++    def test_attendees_not_mailed_by_default(self):
++        self.event.settings.mail_days_download_reminder = 2
++        self.op1.attendee_email = 'attendee@dummy.test'
++        self.op1.save()
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 1
++        assert djmail.outbox[0].to == ['dummy@dummy.test']
++
++    @classscope(attr='o')
++    def test_attendee_with_order_email_and_addon_not_mailed_twice(self):
++        self.event.settings.mail_days_download_reminder = 2
++        self.event.settings.mail_send_download_reminder_attendee = True
++        self.op1.attendee_email = 'dummy@dummy.test'
++        self.op1.save()
++        OrderPosition.objects.create(
++            order=self.order, item=self.ticket, variation=None, addon_to=self.op1,
++            price=Decimal("0.00"), attendee_name_parts={'full_name': "Addon"}, positionid=2,
++            attendee_email='addon@dummy.test',
++        )
++        send_download_reminders(sender=self.event)
++        assert len(djmail.outbox) == 1
++        assert djmail.outbox[0].to == ['dummy@dummy.test']
++
++    @classscope(attr='o')
++    def test_subevent_date_decides(self):
++        with scope(organizer=self.o):
++            event = Event.objects.create(
++                organizer=self.o, name='Series', slug='series', has_subevents=True,
++                date_from=now() + timedelta(days=2),
++            )
++            event.settings.ticket_download = True
++            event.settings.mail_days_download_reminder = 2
++            item = Item.objects.create(event=event, name='Ticket', default_price=Decimal('23.00'), admission=True)
++            se_far = SubEvent.objects.create(event=event, name='Far', date_from=now() + timedelta(days=10), active=True)
++            se_near = SubEvent.objects.create(event=event, name='Near', date_from=now() + timedelta(days=2), active=True)
++
++            far_order = self._create_order('FAR', event=event)
++            OrderPosition.objects.create(
++                order=far_order, item=item, variation=None, subevent=se_far,
++                price=Decimal("23.00"), attendee_name_parts={'full_name': "Far"}, positionid=1,
++            )
++            near_order = self._create_order('NEAR', event=event)
++            OrderPosition.objects.create(
++                order=near_order, item=item, variation=None, subevent=se_near,
++                price=Decimal("23.00"), attendee_name_parts={'full_name': "Near"}, positionid=1,
++            )
++
++            send_download_reminders(sender=event)
++            far_order.refresh_from_db()
++            near_order.refresh_from_db()
++            assert not far_order.download_reminder_sent
++            assert near_order.download_reminder_sent
++            assert len(djmail.outbox) == 1
++
++
+ class PaymentFailedTests(TestCase):
+     def setUp(self):
+         super().setUp()

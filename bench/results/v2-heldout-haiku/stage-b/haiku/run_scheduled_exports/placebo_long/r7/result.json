@@ -1,0 +1,62 @@
+{
+  "run_id": "haiku/run_scheduled_exports/placebo_long/r7",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "run_scheduled_exports",
+  "condition": "placebo_long",
+  "rep": 7,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 107.6,
+  "cost_usd": 0.02287027,
+  "num_turns": 18,
+  "duration_s": 105.7,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 12,
+    "Edit": 3
+  },
+  "files_read": [],
+  "skills_invoked": [
+    "careful-dev"
+  ],
+  "bash_commands": [
+    "git status --short | head; cat src/pretix/base/services/export.py; grep -rn \"periodic_task\\|@app.task(base=\\|scheduled\" src/pretix/base/services/*.py src/pretix/base/models/*.py | grep -i \"periodic\\|schedul\" | head -40",
+    "cat src/pretix/base/models/exports.py | sed -n 1,400p | grep -v \"^#\" ; echo ----; sed -n 1436,1475p src/pretix/base/services/orders.py; echo ----; sed -n 670,760p src/pretix/base/services/invoices.py; echo ----; grep -rn \"scheduled_organizer_export\\|scheduled_event_export\\|run_scheduled_exports\\|schedule_next\\|next_run\" src/pretix --include=*.py | grep -v migrations | head -30; git log --oneline | head -3",
+    "sed -n 2325,2345p src/pretix/control/views/organizer.py; echo ----; sed -n 3025,3040p src/pretix/control/views/orders.py; echo ----; grep -rln \"scheduled_exports\\|ScheduledEventExport\\|ScheduledOrganizerExport\" src/tests | head; echo ----; grep -n \"def minimum_interval\" -A30 src/pretix/base/services/*.py src/pretix/helpers/*.py | head -50; echo ----; sed -n 1095,1115p src/pretix/base/services/mail.py",
+    "grep -rn \"run_scheduled\\|schedule_next_run\" src/tests doc 2>/dev/null | head -20; echo ----; grep -n \"scheduled\\|^def \\|^class \\|^import\\|^from\" src/tests/base/test_export.py | head -120",
+    "grep -rn \"periodic_task.send\\|periodic_task\\b\" src/tests | head -8; echo ----; grep -rn \"apply_async\" src/tests/base/test_export.py src/tests/control/test_export.py | head -5; echo ----; grep -n \"class OrganizerTask\\|class EventTask\" -A12 src/pretix/base/services/tasks.py | head -50; echo ----; sed -n 36,70p src/tests/base/test_export.py",
+    "sed -n 22,35p src/tests/base/test_export.py; wc -l src/tests/base/test_export.py; tail -5 src/tests/base/test_export.py",
+    "cat >> src/tests/base/test_export.py <<'EOF'\n\n\ndef _scheduled_event_export(event, user, next_run):\n    return ScheduledEventExport.objects.create(\n        event=event,\n        owner=user,\n        export_identifier='orderlist',\n        export_form_data={},\n        locale='en',\n        mail_subject='Export',\n        mail_template='Here is your export.',\n        schedule_rrule='FREQ=DAILY',\n        schedule_rrule_time=time(6, 30),\n        schedule_next_run=next_run,\n    )\n\n\ndef _scheduled_organizer_export(organizer, user, next_run):\n    return ScheduledOrganizerExport.objects.create(\n        organizer=organizer,\n        owner=user,\n        export_identifier='orderlist',\n        export_form_data={},\n        locale='en',\n        mail_subject='Export',\n        mail_template='Here is your export.',\n        schedule_rrule='FREQ=DAILY',\n        schedule_rrule_time=time(6, 30),\n        schedule_next_run=next_run,\n        timezone='UTC',\n    )\n\n\n@pytest.mark.django_db\n@freeze_time(\"2023-01-19 12:00:00\")\ndef test_run_scheduled_exports_queues_due_event_export(event, user):\n    s = _scheduled_event_export(event, user, now() - timedelta(minutes=1))\n\n    with mock.patch.object(scheduled_event_export, 'apply_async') as apply_async:\n        run_scheduled_exports(sender=None)\n\n    apply_async.assert_called_once_with(kwargs={'event': event.pk, 'schedule': s.pk})\n    s.refresh_from_db()\n    assert s.schedule_next_run > now()\n\n\n@pytest.mark.django_db\n@freeze_time(\"2023-01-19 12:00:00\")\ndef test_run_scheduled_exports_queues_due_organizer_export(event, user):\n    organizer = event.organizer\n    s = _scheduled_organizer_export(organizer, user, now() - timedelta(minutes=1))\n\n    with mock.patch.object(scheduled_organizer_export, 'apply_async') as apply_async:\n        run_scheduled_exports(sender=None)\n\n    apply_async.assert_called_once_with(kwargs={'organizer': organizer.pk, 'schedule': s.pk})\n    s.refresh_from_db()\n    assert s.schedule_next_run > now()\n\n\n@pytest.mark.django_db\n@freeze_time(\"2023-01-19 12:00:00\")\ndef test_run_scheduled_exports_skips_schedules_not_yet_due(event, user):\n    _scheduled_event_export(event, user, now() + timedelta(minutes=1))\n    _scheduled_organizer_export(event.organizer, user, now() + timedelta(minutes=1))\n\n    with mock.patch.object(scheduled_event_export, 'apply_async') as event_apply_async, \\\n            mock.patch.object(scheduled_organizer_export, 'apply_async') as organizer_apply_async:\n        run_scheduled_exports(sender=None)\n\n    event_apply_async.assert_not_called()\n    organizer_apply_async.assert_not_called()\n\n\n@pytest.mark.django_db\n@freeze_time(\"2023-01-19 12:00:00\")\ndef test_run_scheduled_exports_skips_schedules_without_next_run(event, user):\n    _scheduled_event_export(event, user, None)\n    _scheduled_organizer_export(event.organizer, user, None)\n\n    with mock.patch.object(scheduled_event_export, 'apply_async') as event_apply_async, \\\n            mock.patch.object(scheduled_organizer_export, 'apply_async') as organizer_apply_async:\n        run_scheduled_exports(sender=None)\n\n    event_apply_async.assert_not_called()\n    organizer_apply_async.assert_not_called()\n\n\n@pytest.mark.django_db\n@freeze_time(\"2023-01-19 12:00:00\")\ndef test_run_scheduled_exports_does_not_queue_same_run_twice(event, user):\n    _scheduled_event_export(event, user, now() - timedelta(minutes=1))\n\n    with mock.patch.object(scheduled_event_export, 'apply_async') as apply_async:\n        run_scheduled_exports(sender=None)\n        run_scheduled_exports(sender=None)\n\n    assert apply_async.call_count == 1\nEOF\ncd src && timeout 900 python -m pytest tests/base/test_export.py -q -p no:cacheprovider 2>&1 | tail -25",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-stageB/haiku/run_scheduled_exports/placebo_long/r7/repo/src && timeout 900 python -m pytest tests/base/test_export.py -q -p no:cacheprovider 2>&1 | tail -30",
+    "timeout 900 python -m pytest tests/base/test_runperiodic.py tests/control/test_export.py tests/base/test_export.py -q -p no:cacheprovider 2>&1 | tail -15; (python -m flake8 pretix/base/services/export.py tests/base/test_export.py && python -m isort -c pretix/base/services/export.py tests/base/test_export.py && echo LINT_OK) 2>&1 | tail -8",
+    "timeout 900 python -m pytest tests/base/test_runperiodic.py tests/control/test_export.py tests/base/test_export.py -q -p no:cacheprovider 2>&1 | tail -15",
+    "python -m flake8 pretix/base/services/export.py tests/base/test_export.py; echo \"flake8 exit $?\"; python -m isort -c pretix/base/services/export.py tests/base/test_export.py; echo \"isort exit $?\"",
+    "python -m flake8 pretix/base/services/export.py tests/base/test_export.py && echo FLAKE8_OK"
+  ],
+  "seam_table": false,
+  "output_chars": 4505,
+  "hidden": {
+    "base.test_export::test_event_run_sets_new_time": true,
+    "base.test_export::test_event_not_run_when_failed_5_times": false,
+    "base.test_export::test_event_fail_invalid_config": true,
+    "base.test_export::test_event_fail_user_inactive": true,
+    "base.test_export::test_event_fail_user_no_permission": true,
+    "base.test_export::test_organizer_run_sets_new_time": true,
+    "base.test_export::test_organizer_not_run_when_failed_5_times": false,
+    "base.test_export::test_organizer_fail_invalid_config": true,
+    "base.test_export::test_organizer_fail_user_inactive": true,
+    "base.test_export::test_organizer_fail_user_does_not_have_specific_permission": true,
+    "base.test_export::test_event_ok": true,
+    "base.test_export::test_organizer_limited_to_events": true,
+    "base.test_export::test_organizer_ok": true
+  },
+  "hidden_passed": 11,
+  "hidden_total": 13,
+  "visible_green": true,
+  "visible_passed": 5,
+  "visible_total": 5,
+  "diff_lines": 133
+}

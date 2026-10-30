@@ -1,0 +1,68 @@
+{
+  "run_id": "haiku/run_scheduled_exports/skill_v2/r5",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "run_scheduled_exports",
+  "condition": "skill_v2",
+  "rep": 5,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 105.4,
+  "cost_usd": 0.02579406,
+  "num_turns": 21,
+  "duration_s": 103.4,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 14,
+    "Read": 1,
+    "Edit": 2,
+    "Write": 1
+  },
+  "files_read": [
+    "src/pretix/base/services/export.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-stageB/haiku/run_scheduled_exports/skill_v2/r5/repo/src && cat pretix/base/services/export.py && grep -rn \"schedule\" --include=*.py pretix/base/models/ pretix/base/exporters/ pretix/base/services/ | grep -v migrations | head -60",
+    "sed -n 60,140p pretix/base/models/exports.py; grep -rn \"periodic_task\" --include=*.py pretix | grep -v \"^pretix/base/signals\" | head -20; grep -rn -B2 -A12 \"@receiver(periodic_task\" pretix/base/services/ pretix/base/models 2>/dev/null | head -80; grep -rn \"scheduled_organizer_export\\|scheduled_event_export\\|run_scheduled\" --include=*.py pretix | grep -v \"services/export.py\"",
+    "sed -n 2325,2345p pretix/control/views/organizer.py; sed -n 3025,3040p pretix/control/views/orders.py; grep -rn \"compute_next_run\\|schedule_next_run\" --include=*.py pretix | grep -v migrations; sed -n 1095,1130p pretix/base/services/mail.py; grep -rln \"scheduled_exports\\|ScheduledEventExport\\|ScheduledOrganizerExport\\|scheduled_event_export\" tests | head; git -C .. log --oneline -3",
+    "sed -n 2325,2345p pretix/control/views/organizer.py; sed -n 3025,3040p pretix/control/views/orders.py; grep -rn \"compute_next_run\\|schedule_next_run\" --include=*.py pretix | grep -v migrations; sed -n 1095,1130p pretix/base/services/mail.py",
+    "sed -n 20,60p pretix/helpers/periodic.py; grep -n \"class EventTask\\|class OrganizerTask\" -A12 pretix/base/services/tasks.py | head -50; grep -rln \"scheduled_exports\\|ScheduledEventExport\\|ScheduledOrganizerExport\\|scheduled_event_export\" tests | head; grep -rn \"periodic_task\" pretix/celery_app.py pretix/base/services/*.py | grep -i \"send\\|beat\" | head",
+    "grep -n \"schedul\\|^import\\|^from\\|^def \\|^@pytest\" tests/base/test_export.py | head -80; grep -n \"periodic_task.send\\|periodic_task.send\" -r pretix tests | head -5",
+    "sed -n 30,70p tests/base/test_export.py; grep -n \"ScheduledEventExport\\|ScheduledOrganizerExport\" -A8 tests/control/test_export.py | head -40",
+    "cat >> pretix/base/services/export.py <<'EOF'\n\n\ndef _dispatch_due_scheduled_exports(model, task, parent_field):\n    \"\"\"\n    Dispatch all schedules of ``model`` whose next run is due. The next run time is advanced in the same\n    transaction that dispatches the task, under a row lock, so an occurrence is never dispatched twice even if\n    several workers run the periodic job concurrently. A failing schedule is rolled back (and thus retried on\n    the next periodic run) without blocking the other schedules.\n    \"\"\"\n    due_ids = list(model.objects.filter(schedule_next_run__lte=now()).values_list('pk', flat=True))\n    for pk in due_ids:\n        try:\n            with transaction.atomic():\n                s = model.objects.select_for_update(\n                    of=OF_SELF, skip_locked=connection.features.has_select_for_update_skip_locked\n                ).filter(pk=pk, schedule_next_run__lte=now()).first()\n                if s is None:\n                    # Locked by another worker, or already dispatched by another worker\n                    continue\n                s.compute_next_run()\n                s.save(update_fields=['schedule_next_run'])\n                task.apply_async(kwargs={\n                    parent_field: getattr(s, f'{parent_field}_id'),\n                    'schedule': s.pk,\n                })\n        except Exception:\n            logger.exception(f\"Could not dispatch scheduled export {pk} of {model.__name__}.\")\n\n\n@receiver(signal=periodic_task)\n@scopes_disabled()\ndef run_scheduled_exports(sender, **kwargs):\n    \"\"\"\n    Dispatch event-level and organizer-level scheduled exports that are due.\n    \"\"\"\n    _dispatch_due_scheduled_exports(ScheduledEventExport, scheduled_event_export, 'event')\n    _dispatch_due_scheduled_exports(ScheduledOrganizerExport, scheduled_organizer_export, 'organizer')\nEOF\nsed -n 1,20p pretix/base/services/export.py >/dev/null; grep -n \"^from pretix.helpers import\\|OF_SELF\" pretix/base/services/export.py | head -3; ls tests/base/test_export.py && grep -n \"freeze_time\\|def test_\" tests/base/test_export.py | head -20",
+    "timeout 500000 python -m pytest tests/base/test_scheduled_exports.py -q -p no:cacheprovider 2>&1 | tail -40",
+    "timeout 500000 python -m pytest tests/base/test_export.py tests/base/test_runperiodic.py tests/base/test_scheduled_exports.py -q -p no:cacheprovider 2>&1 | tail -15; (python -m flake8 pretix/base/services/export.py tests/base/test_scheduled_exports.py && python -m isort --check-only pretix/base/services/export.py tests/base/test_scheduled_exports.py) 2>&1 | tail -10; echo lint-exit=$?",
+    "timeout 500000 python -m pytest tests/base/test_export.py tests/base/test_runperiodic.py tests/base/test_scheduled_exports.py -q -p no:cacheprovider 2>&1 | tail -15; python -m flake8 pretix/base/services/export.py tests/base/test_scheduled_exports.py; python -m isort --check-only pretix/base/services/export.py tests/base/test_scheduled_exports.py",
+    "timeout 500000 python -m pytest tests/base/test_export.py tests/base/test_runperiodic.py tests/base/test_scheduled_exports.py -q -p no:cacheprovider 2>&1 | tail -15",
+    "python -m flake8 pretix/base/services/export.py tests/base/test_scheduled_exports.py; echo flake8=$?; python -m isort --check-only pretix/base/services/export.py tests/base/test_scheduled_exports.py; echo isort=$?",
+    "python -m flake8 pretix/base/services/export.py tests/base/test_scheduled_exports.py && python -m isort --check-only pretix/base/services/export.py tests/base/test_scheduled_exports.py && echo LINT_OK"
+  ],
+  "seam_table": false,
+  "output_chars": 2768,
+  "hidden": {
+    "base.test_export::test_event_run_sets_new_time": true,
+    "base.test_export::test_event_not_run_when_failed_5_times": false,
+    "base.test_export::test_event_fail_invalid_config": true,
+    "base.test_export::test_event_fail_user_inactive": true,
+    "base.test_export::test_event_fail_user_no_permission": true,
+    "base.test_export::test_organizer_run_sets_new_time": true,
+    "base.test_export::test_organizer_not_run_when_failed_5_times": false,
+    "base.test_export::test_organizer_fail_invalid_config": true,
+    "base.test_export::test_organizer_fail_user_inactive": true,
+    "base.test_export::test_organizer_fail_user_does_not_have_specific_permission": true,
+    "base.test_export::test_event_ok": true,
+    "base.test_export::test_organizer_limited_to_events": true,
+    "base.test_export::test_organizer_ok": true
+  },
+  "hidden_passed": 11,
+  "hidden_total": 13,
+  "visible_green": false,
+  "visible_passed": 0,
+  "visible_total": 0,
+  "diff_lines": 194
+}
