@@ -35,16 +35,22 @@ def suite_tasks(suite: Path) -> list[str]:
         return list(config["tasks"])
     return sorted(p.name for p in (suite / "tasks").iterdir() if p.is_dir())
 
+# skill variant -> (name it is installed under, source file). Variants of one skill share
+# the installed name, so their conditions get the identical prompt and differ only in content.
 SKILLS = {
-    "seam-audit": ROOT / "SKILL.md",
-    "careful-dev": BENCH / "conditions" / "careful-dev" / "SKILL.md",
+    "seam-audit": ("seam-audit", ROOT / "SKILL.md"),
+    "seam-audit-v2": ("seam-audit", BENCH / "conditions" / "seam-audit-v2" / "SKILL.md"),
+    "careful-dev": ("careful-dev", BENCH / "conditions" / "careful-dev" / "SKILL.md"),
+    "careful-dev-long": ("careful-dev", BENCH / "conditions" / "careful-dev-long" / "SKILL.md"),
 }
 
-# condition -> (skill to install or None, line appended to the task prompt)
+# condition -> (skill variant to install or None, line appended to the task prompt)
 CONDITIONS = {
     "baseline": (None, ""),
     "skill": ("seam-audit", "Before you start, use the `seam-audit` skill."),
     "placebo": ("careful-dev", "Before you start, use the `careful-dev` skill."),
+    "skill_v2": ("seam-audit-v2", "Before you start, use the `seam-audit` skill."),
+    "placebo_long": ("careful-dev-long", "Before you start, use the `careful-dev` skill."),
 }
 
 AGENT_TOOLS = "Read,Edit,Write,Glob,Grep,Bash,Skill"
@@ -77,11 +83,12 @@ def prepare_repo(dest: Path, condition: str, suite: Path, task: str) -> Path:
     (repo / ".git" / "info" / "exclude").write_text("\n".join(exclude) + "\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "initial")
-    skill, _ = CONDITIONS[condition]
-    if skill:
-        target = repo / ".claude" / "skills" / skill
+    variant, _ = CONDITIONS[condition]
+    if variant:
+        name, source = SKILLS[variant]
+        target = repo / ".claude" / "skills" / name
         target.mkdir(parents=True)
-        shutil.copy(SKILLS[skill], target / "SKILL.md")
+        shutil.copy(source, target / "SKILL.md")
     return repo
 
 
