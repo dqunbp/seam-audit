@@ -1,0 +1,63 @@
+{
+  "run_id": "haiku/expire_orders/skill/r1",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "expire_orders",
+  "condition": "skill",
+  "rep": 1,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 202.6,
+  "cost_usd": 0.031615410000000004,
+  "num_turns": 34,
+  "duration_s": 200.0,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 7,
+    "Bash": 9,
+    "Read": 9,
+    "Edit": 6
+  },
+  "files_read": [
+    "src/pretix/base/models/orders.py",
+    "src/pretix/base/services/mail.py",
+    "src/pretix/base/services/orders.py",
+    "src/pretix/base/settings.py",
+    "src/pretix/helpers/periodic.py",
+    "src/tests/base/test_orders.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "git status --short | head -20 && git log --oneline -3 && ls src/pretix/base/services/ && find . -name CLAUDE.md -o -name AGENTS.md | grep -v node_modules | head",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/skill/r1/repo/src && grep -n \"valid_if_pending = \\|require_approval = \\|expiry_reminder_sent = \\|    expires = models\" pretix/base/models/orders.py | head; sed -n 317,335p tests/base/test_orders.py; sed -n 555,575p tests/base/test_orders.py",
+    "tail -5 tests/base/test_orders.py; echo ---; grep -n \"OrderFee.objects.create\" tests/base/test_orders.py | head -3; grep -n \"^from unittest\\|^import mock\\|from unittest\" tests/base/test_orders.py | head",
+    "grep -n \"OrderFee(\" tests/base/test_orders.py | head -3; grep -n \"fee_type=OrderFee.FEE_TYPE_CANCELLATION\" -r tests | head -3",
+    "timeout 600 python -m pytest tests/base/test_orders.py -k \"expire_orders\" -q -p no:cacheprovider 2>&1 | tail -40",
+    "timeout 600 python -m pytest tests/base/test_orders.py -k \"expire_orders\" -q -p no:cacheprovider 2>&1 | tail -40",
+    "(python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -5; echo \"flake8 exit: $?\"); timeout 900 python -m pytest tests/base/test_orders.py -q -p no:cacheprovider 2>&1 | tail -15",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit: $?\"",
+    "timeout 900 python -m pytest tests/base/test_orders.py -q -p no:cacheprovider 2>&1 | tail -15"
+  ],
+  "seam_table": false,
+  "output_chars": 4140,
+  "hidden": {
+    "base.test_orders::test_expiring": true,
+    "base.test_orders::test_expiring_paid_invoice": true,
+    "base.test_orders::test_expire_twice": true,
+    "base.test_orders::test_expire_skipped_if_canceled_with_fee": true,
+    "base.test_orders::test_expiring_auto_disabled": true,
+    "base.test_orders::test_expiring_auto_delayed": true,
+    "base.test_orders::test_expiring_auto_delayed_weekdays": true,
+    "base.test_orders::test_do_not_expire_if_approval_pending": true
+  },
+  "hidden_passed": 8,
+  "hidden_total": 8,
+  "visible_green": true,
+  "visible_passed": 428,
+  "visible_total": 428,
+  "diff_lines": 131
+}

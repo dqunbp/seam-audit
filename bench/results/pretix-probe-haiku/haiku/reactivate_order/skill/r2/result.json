@@ -1,0 +1,71 @@
+{
+  "run_id": "haiku/reactivate_order/skill/r2",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "reactivate_order",
+  "condition": "skill",
+  "rep": 2,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 168.3,
+  "cost_usd": 0.0364787,
+  "num_turns": 33,
+  "duration_s": 166.0,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 15,
+    "Grep": 7,
+    "Read": 4,
+    "Edit": 4
+  },
+  "files_read": [
+    "src/pretix/base/models/orders.py",
+    "src/pretix/base/secrets.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "ls; cat CLAUDE.md AGENTS.md 2>/dev/null | head -150; git status --short | head; git log --oneline -3; grep -rn \"reactivate\" src/pretix --include=*.py | head -40",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/reactivate_order/skill/r2/repo/src && sed -n 380,560p pretix/base/services/orders.py; echo ----; sed -n 1900,1965p pretix/control/views/orders.py; echo ----; sed -n 470,520p pretix/api/views/order.py; echo ----; sed -n 770,790p pretix/base/signals.py",
+    "sed -n 560,640p pretix/base/services/orders.py; echo ----GREP; grep -n \"^def \\|^class \" pretix/base/services/orders.py | head -120; echo ----; grep -rn \"reactivat\" tests pretix/base/models pretix/base/forms 2>/dev/null | head -30",
+    "sed -n 117,130p pretix/base/services/orders.py; sed -n 205,330p pretix/base/services/orders.py; echo ----; sed -n 640,760p pretix/base/services/orders.py",
+    "grep -n \"def _is_still_available\\|def set_expires\\|def payment_refund_sum\\|def cancel_allowed\\|def create_transactions\\|def _get_quota_availability\\|def is_expired\\|def can_modify_answers\" pretix/base/models/orders.py; n=$(grep -n \"def _is_still_available\" pretix/base/models/orders.py | cut -d: -f1); sed -n \"${n},$((n+95))p\" pretix/base/models/orders.py",
+    "sed -n 80,100p pretix/base/services/orders.py; sed -n 259,262p pretix/base/models/orders.py; sed -n 1252,1300p tests/base/test_orders.py; grep -n \"def test_cancel\\|def test_extend\\|class \" tests/base/test_orders.py | sed -n 1,200p | grep -n \"Cancel\\|extend\\|Extend\" | head -60; grep -n \"OF_SELF\" pretix/base/services/orders.py | head -3",
+    "grep -n \"extend_order(\\|force=True\" tests/base/test_orders.py | head -20; n=$(grep -n \"def test_extend_expired_quota_left\\|def test_extend_expired_quota_empty\\|def test_extend_expired_quota_ignore\" tests/base/test_orders.py | head -1 | cut -d: -f1); echo \"start=$n\"; sed -n \"$((n-3)),$((n+30))p\" tests/base/test_orders.py",
+    "sed -n 40,75p tests/base/test_orders.py; grep -n \"^class \\|^@pytest\" tests/base/test_orders.py | awk -F: '$1>1240 && $1<1420'",
+    "sed -n 40,75p tests/base/test_orders.py; grep -n \"^class \" tests/base/test_orders.py",
+    "timeout 580 python -m pytest tests/base/test_orders.py -k \"OrderReactivateTests or OrderCancelTests\" -q -p no:cacheprovider 2>&1 | tail -60",
+    "(python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -20; echo \"flake8 exit=$?\"); (python -m isort --check-only --diff pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -20; echo \"isort done\"); timeout 580 python -m pytest tests/control/test_permissions.py -k \"reactivate or FOO\" -q -p no:cacheprovider 2>&1 | tail -5",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit=$?\"; python -m isort --check-only pretix/base/services/orders.py tests/base/test_orders.py; echo \"isort exit=$?\"",
+    "timeout 580 python -m pytest tests/control/test_permissions.py -k \"reactivate\" -q -p no:cacheprovider 2>&1 | tail -5",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/reactivate_order/skill/r2/repo && git diff --stat"
+  ],
+  "seam_table": true,
+  "output_chars": 7190,
+  "hidden": {
+    "base.test_orders.OrderReactivateTest::test_paid": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_gift_card": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_membership": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_paid": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_seat_taken": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_sold_out": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_unpaid": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_voucher_budget": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_voucher_ok": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_voucher_used": true,
+    "api.test_orders::test_order_reactivate": true,
+    "api.test_orders::test_order_reactivate_invalid": true,
+    "control.test_orders::test_order_reactivate_not_canceled": true,
+    "control.test_orders::test_order_reactivate": true
+  },
+  "hidden_passed": 14,
+  "hidden_total": 14,
+  "visible_green": true,
+  "visible_passed": 423,
+  "visible_total": 423,
+  "diff_lines": 191
+}

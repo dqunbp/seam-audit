@@ -1,0 +1,61 @@
+{
+  "run_id": "haiku/video_webhook/skill/r2",
+  "model": "haiku",
+  "task": "video_webhook",
+  "condition": "skill",
+  "rep": 2,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 83.6,
+  "cost_usd": 0.01928074,
+  "num_turns": 15,
+  "duration_s": 81.5,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 10,
+    "Write": 2
+  },
+  "files_read": [],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "git status --short && git log --oneline | head -5 && find . -path ./.git -prune -o -type f -print | grep -v __pycache__ | head -200 && echo ---- && cat CLAUDE.md AGENTS.md 2>/dev/null",
+    "cat docs/lumen_api.md && echo ---- && cat pixforge/features/video.py",
+    "for f in pixforge/jobs.py pixforge/features/common.py pixforge/billing.py pixforge/webhooks/payments.py pixforge/webhooks/dedup.py pixforge/webhooks/signing.py pixforge/webhooks/__init__.py pixforge/migrations/001_init.sql pixforge/migrations/002_quota.sql pixforge/sweeper.py; do echo \"==== $f\"; cat \"$f\"; done",
+    "cat pixforge/jobs.py pixforge/features/common.py pixforge/billing.py pixforge/webhooks/payments.py pixforge/webhooks/dedup.py pixforge/webhooks/signing.py pixforge/webhooks/__init__.py pixforge/migrations/001_init.sql pixforge/migrations/002_quota.sql",
+    "cat lumen_sdk/types.py lumen_sdk/client.py lumen_sdk/errors.py pixforge/sweeper.py pixforge/db.py pixforge/clock.py",
+    "cat tests/conftest.py tests/fakes.py tests/test_payments_webhook.py tests/test_video.py && cat pixforge/locales/en.json && cat pixforge/features/generate.py | head -80",
+    "cat pixforge/locales/ru.json pixforge/i18n.py tests/test_i18n.py && cat pyproject.toml && (python -m pytest -q 2>&1 | tail -15)",
+    "cat pixforge/locales/ru.json pixforge/i18n.py tests/test_i18n.py pyproject.toml",
+    "python -m pytest -q",
+    "python -m pytest -q"
+  ],
+  "seam_table": true,
+  "output_chars": 6040,
+  "hidden": {
+    "test_completed_marks_job_succeeded_with_url": true,
+    "test_failed_marks_job_failed_and_refunds": true,
+    "test_progress_is_acknowledged_and_keeps_processing": true,
+    "test_wrong_signature_is_rejected": true,
+    "test_missing_signature_is_rejected": true,
+    "test_stale_signature_is_rejected": true,
+    "test_duplicate_failed_event_refunds_once": true,
+    "test_duplicate_completed_event_is_harmless": true,
+    "test_progress_after_completed_keeps_succeeded": true,
+    "test_failed_after_completed_does_not_refund": true,
+    "test_failed_after_sweeper_timeout_does_not_refund_twice": true,
+    "test_unknown_job_does_not_crash": true,
+    "test_moderated_completion_is_not_success": true,
+    "test_moderated_completion_is_refunded": true,
+    "test_no_direct_balance_writes": true
+  },
+  "hidden_passed": 15,
+  "hidden_total": 15,
+  "visible_green": true,
+  "visible_passed": 29,
+  "visible_total": 29,
+  "diff_lines": 238
+}

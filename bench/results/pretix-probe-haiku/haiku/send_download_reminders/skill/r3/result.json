@@ -1,0 +1,69 @@
+{
+  "run_id": "haiku/send_download_reminders/skill/r3",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "send_download_reminders",
+  "condition": "skill",
+  "rep": 3,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 106.9,
+  "cost_usd": 0.02277918,
+  "num_turns": 25,
+  "duration_s": 104.8,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 3,
+    "Bash": 9,
+    "Read": 7,
+    "Edit": 3
+  },
+  "files_read": [
+    "src/pretix/base/models/orders.py",
+    "src/pretix/base/services/orders.py",
+    "src/pretix/base/settings.py",
+    "src/pretix/base/timeline.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "git status --short | head -20 && git log --oneline -3 && ls CLAUDE.md AGENTS.md 2>/dev/null; wc -l src/pretix/base/services/orders.py",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/send_download_reminders/skill/r3/repo/src && grep -n \"sales_channel\" pretix/base/models/orders.py | head -5; sed -n 1625,1635p pretix/control/forms/event.py; grep -n \"class.*Expiry\\|def test_.*expiry_warn\\|send_expiry_warnings\\|mail_days_order_expire_warning\" tests/base/test_orders.py | head -12; grep -n \"minimum_interval\" -A3 pretix/helpers/periodic.py | head -30; grep -rn \"ticket_download_pending\\|'ticket_download'\" pretix/base/settings.py | head -3; grep -n \"attach_tickets\" pretix/base/services/mail.py | head -5",
+    "sed -n 1179,1192p pretix/base/models/orders.py; sed -n 33,60p pretix/helpers/periodic.py | grep -v '^\\s*$' | head -30; sed -n 905,930p tests/base/test_orders.py; sed -n 560,566p pretix/control/logdisplay.py",
+    "grep -rn \"position.email.*download\\|download_reminder\" pretix/control/logdisplay.py pretix/base/services/*.py | head; grep -n \"def get_email_context\" -A3 pretix/base/services/mail.py; grep -n \"^class \\|^from\\|^import\" tests/base/test_orders.py | sed -n 1,200p | grep -n \"class\\|mail\\|scopes\\|timedelta\" | head -30; sed -n 880,904p tests/base/test_orders.py",
+    "sed -n 56,60p tests/base/test_orders.py; sed -n 904,912p tests/base/test_orders.py",
+    "timeout 580 python -m pytest tests/base/test_orders.py -k \"DownloadReminderTests or PaymentReminderTests\" -q -p no:cacheprovider 2>&1 | tail -30; python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -5; echo \"flake8 exit: $?\"",
+    "timeout 580 python -m pytest tests/base/test_orders.py -k \"DownloadReminderTests or PaymentReminderTests\" -q -p no:cacheprovider",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/send_download_reminders/skill/r3/repo && git diff --stat"
+  ],
+  "seam_table": true,
+  "output_chars": 6023,
+  "hidden": {
+    "base.test_orders.DownloadReminderTests::test_disabled": true,
+    "base.test_orders.DownloadReminderTests::test_downloads_all_allowed_by_plugin": false,
+    "base.test_orders.DownloadReminderTests::test_downloads_disabled": true,
+    "base.test_orders.DownloadReminderTests::test_downloads_disabled_by_plugin": false,
+    "base.test_orders.DownloadReminderTests::test_downloads_disabled_per_product": false,
+    "base.test_orders.DownloadReminderTests::test_downloads_partially_disabled_by_plugin": false,
+    "base.test_orders.DownloadReminderTests::test_not_sent_after_reminder_date": false,
+    "base.test_orders.DownloadReminderTests::test_not_sent_for_disabled_sales_channel": true,
+    "base.test_orders.DownloadReminderTests::test_not_sent_too_early": true,
+    "base.test_orders.DownloadReminderTests::test_not_sent_too_soon_after_purchase": false,
+    "base.test_orders.DownloadReminderTests::test_send_not_to_attendees_with_same_address": true,
+    "base.test_orders.DownloadReminderTests::test_send_to_attendees": false,
+    "base.test_orders.DownloadReminderTests::test_send_to_attendees_subevent_future": false,
+    "base.test_orders.DownloadReminderTests::test_send_to_attendees_subevent_past": true,
+    "base.test_orders.DownloadReminderTests::test_sent_once": true,
+    "base.test_orders.DownloadReminderTests::test_sent_paid_only": true
+  },
+  "hidden_passed": 8,
+  "hidden_total": 16,
+  "visible_green": true,
+  "visible_passed": 422,
+  "visible_total": 422,
+  "diff_lines": 144
+}

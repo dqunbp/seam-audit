@@ -1,0 +1,61 @@
+{
+  "run_id": "haiku/video_webhook/placebo/r2",
+  "model": "haiku",
+  "task": "video_webhook",
+  "condition": "placebo",
+  "rep": 2,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 68.2,
+  "cost_usd": 0.01622456,
+  "num_turns": 16,
+  "duration_s": 66.5,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 10,
+    "Write": 3
+  },
+  "files_read": [],
+  "skills_invoked": [
+    "careful-dev"
+  ],
+  "bash_commands": [
+    "git status --short && ls -R pixforge | head -80 && ls tests 2>/dev/null; cat README.md | head -60; sed -n '/Webhooks/,/^## [A-Za-z]/p' docs/lumen_api.md",
+    "cat pixforge/features/video.py; ls pixforge/features pixforge; ",
+    "grep -n -A60 \"## Webhooks\" docs/lumen_api.md | head -120; ls pixforge/webhooks; cat pixforge/webhooks/*.py | head -150",
+    "cat pixforge/features/common.py pixforge/jobs.py pixforge/billing.py",
+    "sed -n 114,200p docs/lumen_api.md; echo ----; cat pixforge/db.py pixforge/clock.py; echo ----; ls; ls tests; ls tests/* | head -50",
+    "ls pixforge/locales; cat pixforge/locales/en*.* 2>/dev/null | head -60; echo ----; cat pixforge/sweeper.py; echo ----; cat tests/conftest.py tests/fakes.py; echo ----; cat tests/test_payments_webhook.py",
+    "cat tests/test_video.py | head -120; echo ----; ls lumen_sdk; cat lumen_sdk/*.py | head -120; echo ----; cat pixforge/migrations/*.sql | head -80",
+    "python -m pytest -q 2>&1 | tail -15; grep -rn -i \"webhook\\|lumen\" README.md pyproject.toml | head -20; grep -rn \"Lumen-Signature\\|lumen\" pixforge --include=*.py | head",
+    "python -m pytest -q 2>&1 | tail -30",
+    "git status --short"
+  ],
+  "seam_table": false,
+  "output_chars": 4533,
+  "hidden": {
+    "test_completed_marks_job_succeeded_with_url": true,
+    "test_failed_marks_job_failed_and_refunds": true,
+    "test_progress_is_acknowledged_and_keeps_processing": true,
+    "test_wrong_signature_is_rejected": true,
+    "test_missing_signature_is_rejected": true,
+    "test_stale_signature_is_rejected": true,
+    "test_duplicate_failed_event_refunds_once": true,
+    "test_duplicate_completed_event_is_harmless": true,
+    "test_progress_after_completed_keeps_succeeded": true,
+    "test_failed_after_completed_does_not_refund": true,
+    "test_failed_after_sweeper_timeout_does_not_refund_twice": true,
+    "test_unknown_job_does_not_crash": true,
+    "test_moderated_completion_is_not_success": true,
+    "test_moderated_completion_is_refunded": true,
+    "test_no_direct_balance_writes": true
+  },
+  "hidden_passed": 15,
+  "hidden_total": 15,
+  "visible_green": true,
+  "visible_passed": 28,
+  "visible_total": 28,
+  "diff_lines": 214
+}

@@ -1,0 +1,236 @@
+diff --git a/src/pretix/base/services/export.py b/src/pretix/base/services/export.py
+index 493bf71..2f69924 100644
+--- a/src/pretix/base/services/export.py
++++ b/src/pretix/base/services/export.py
+@@ -494,3 +494,35 @@ def scheduled_event_export(self, event: Event, schedule: int) -> None:
+     )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def run_scheduled_exports(sender, **kwargs):
++    # This may run more often than schedules are due, and several workers may run it at once. We therefore claim all
++    # due schedules and move them to their next occurrence in one transaction, so each occurrence is dispatched at
++    # most once. The exports are only queued after that transaction has committed.
++    claimed = []
++    with transaction.atomic():
++        for model in (ScheduledEventExport, ScheduledOrganizerExport):
++            qs = model.objects.select_for_update(
++                of=OF_SELF, skip_locked=connection.features.has_select_for_update_skip_locked
++            ).filter(schedule_next_run__lte=now())
++            for schedule in qs:
++                schedule.compute_next_run()
++                schedule.save(update_fields=['schedule_next_run'])
++                claimed.append(schedule)
++
++    for schedule in claimed:
++        try:
++            if isinstance(schedule, ScheduledEventExport):
++                scheduled_event_export.apply_async(
++                    kwargs={'event': schedule.event_id, 'schedule': schedule.pk},
++                )
++            else:
++                scheduled_organizer_export.apply_async(
++                    kwargs={'organizer': schedule.organizer_id, 'schedule': schedule.pk},
++                )
++        except Exception:
++            # The occurrence has already been advanced, so this run is skipped. Log it and continue with the others.
++            logger.exception('Could not queue scheduled export %s.', schedule.pk)
++
++
+diff --git a/src/tests/base/test_export.py b/src/tests/base/test_export.py
+index 8ed4054..aece393 100644
+--- a/src/tests/base/test_export.py
++++ b/src/tests/base/test_export.py
+@@ -20,6 +20,7 @@
+ # <https://www.gnu.org/licenses/>.
+ #
+ from datetime import datetime, time, timedelta, timezone
++from unittest import mock
+ 
+ import pytest
+ from django.core import mail as djmail
+@@ -28,8 +29,10 @@ from django_scopes import scope
+ from freezegun import freeze_time
+ 
+ from pretix.base.models import (
+-    Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,
++    Event, LogEntry, Organizer, ScheduledEventExport, ScheduledOrganizerExport,
++    User,
+ )
++from pretix.base.services.export import run_scheduled_exports
+ 
+ 
+ @pytest.fixture(scope='function')
+@@ -57,3 +60,171 @@ def user(team):
+     return user
+ 
+ 
++def _event_schedule(event, user, rrule='DTSTART:20230118T000000\nRRULE:FREQ=DAILY'):
++    s = ScheduledEventExport(
++        event=event,
++        owner=user,
++        export_identifier='orderlist',
++        export_form_data={'_format': 'xlsx', 'date_range': 'year_this'},
++        locale='en',
++        mail_additional_recipients='foo@example.org',
++        mail_subject='Order list',
++        mail_template='Here is the order list',
++        schedule_rrule=rrule,
++        schedule_rrule_time=time(4, 0, 0),
++    )
++    s.compute_next_run()
++    s.save()
++    return s
++
++
++def _organizer_schedule(organizer, user, rrule='DTSTART:20230118T000000\nRRULE:FREQ=DAILY'):
++    s = ScheduledOrganizerExport(
++        organizer=organizer,
++        owner=user,
++        export_identifier='eventdata',
++        export_form_data={'_format': 'xlsx', 'all_events': True},
++        locale='en',
++        mail_additional_recipients='foo@example.org',
++        mail_subject='Event list',
++        mail_template='Here is the event list',
++        schedule_rrule=rrule,
++        schedule_rrule_time=time(4, 0, 0),
++        timezone='Europe/Berlin',
++    )
++    s.compute_next_run()
++    s.save()
++    return s
++
++
++# Schedules created on 2023-01-20 13:00 Berlin time with a 04:00 Berlin time are next due on 2023-01-21 04:00 Berlin,
++# which is 03:00 UTC.
++CREATED_AT = '2023-01-20 12:00:00'
++DUE_AT = '2023-01-21 03:00:30'  # 04:00:30 Berlin time
++NEXT_RUN_AFTER_DUE = datetime(2023, 1, 22, 3, 0, 0, tzinfo=timezone.utc)
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_event_level(event, user):
++    with freeze_time(CREATED_AT):
++        s = _event_schedule(event, user)
++    assert s.schedule_next_run == datetime(2023, 1, 21, 3, 0, 0, tzinfo=timezone.utc)
++
++    djmail.outbox = []
++    with freeze_time(DUE_AT):
++        run_scheduled_exports(sender=None)
++
++    assert len(djmail.outbox) == 1
++    assert djmail.outbox[0].subject == 'Order list'
++    assert 'foo@example.org' in djmail.outbox[0].to
++    assert len(djmail.outbox[0].attachments) == 1
++    s.refresh_from_db()
++    assert s.schedule_next_run == NEXT_RUN_AFTER_DUE
++    assert s.error_counter == 0
++    assert LogEntry.objects.filter(action_type='pretix.event.export.schedule.executed', event=event).count() == 1
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_organizer_level(event, user):
++    with freeze_time(CREATED_AT):
++        s = _organizer_schedule(event.organizer, user)
++    assert s.schedule_next_run == datetime(2023, 1, 21, 3, 0, 0, tzinfo=timezone.utc)
++
++    djmail.outbox = []
++    with freeze_time(DUE_AT):
++        run_scheduled_exports(sender=None)
++
++    assert len(djmail.outbox) == 1
++    assert djmail.outbox[0].subject == 'Event list'
++    assert 'foo@example.org' in djmail.outbox[0].to
++    assert len(djmail.outbox[0].attachments) == 1
++    s.refresh_from_db()
++    assert s.schedule_next_run == NEXT_RUN_AFTER_DUE
++    assert s.error_counter == 0
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_dispatches_each_level_with_its_own_task(event, user):
++    organizer = event.organizer
++    with freeze_time(CREATED_AT):
++        es = _event_schedule(event, user)
++        os_ = _organizer_schedule(organizer, user)
++
++    with freeze_time(DUE_AT), \
++            mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as event_task, \
++            mock.patch('pretix.base.services.export.scheduled_organizer_export.apply_async') as organizer_task:
++        run_scheduled_exports(sender=None)
++
++    event_task.assert_called_once_with(kwargs={'event': event.pk, 'schedule': es.pk})
++    organizer_task.assert_called_once_with(kwargs={'organizer': organizer.pk, 'schedule': os_.pk})
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_ignores_schedules_not_yet_due(event, user):
++    with freeze_time(CREATED_AT):
++        s = _event_schedule(event, user)
++    before = s.schedule_next_run
++
++    with freeze_time('2023-01-21 02:00:00'), \
++            mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as event_task:
++        run_scheduled_exports(sender=None)
++
++    event_task.assert_not_called()
++    s.refresh_from_db()
++    assert s.schedule_next_run == before
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_is_idempotent_for_repeated_runs(event, user):
++    with freeze_time(CREATED_AT):
++        _event_schedule(event, user)
++
++    djmail.outbox = []
++    with freeze_time(DUE_AT):
++        run_scheduled_exports(sender=None)
++        run_scheduled_exports(sender=None)
++        run_scheduled_exports(sender=None)
++
++    assert len(djmail.outbox) == 1
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_skips_exhausted_schedules_after_last_run(event, user):
++    with freeze_time(CREATED_AT):
++        s = _event_schedule(event, user, rrule='DTSTART:20230121T040000\nRRULE:FREQ=DAILY;COUNT=1')
++    assert s.schedule_next_run == datetime(2023, 1, 21, 3, 0, 0, tzinfo=timezone.utc)
++
++    djmail.outbox = []
++    with freeze_time(DUE_AT):
++        run_scheduled_exports(sender=None)
++    assert len(djmail.outbox) == 1
++
++    s.refresh_from_db()
++    assert s.schedule_next_run is None
++
++    with freeze_time('2023-02-01 12:00:00'), \
++            mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as event_task:
++        run_scheduled_exports(sender=None)
++    event_task.assert_not_called()
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_continues_after_queueing_failure(event, user):
++    with freeze_time(CREATED_AT):
++        es = _event_schedule(event, user)
++        os_ = _organizer_schedule(event.organizer, user)
++
++    with freeze_time(DUE_AT), \
++            mock.patch('pretix.base.services.export.scheduled_event_export.apply_async',
++                       side_effect=ConnectionError('broker down')), \
++            mock.patch('pretix.base.services.export.scheduled_organizer_export.apply_async') as organizer_task:
++        run_scheduled_exports(sender=None)
++
++    organizer_task.assert_called_once()
++    # Both occurrences are claimed even though one could not be queued. The failed one is skipped, not retried.
++    es.refresh_from_db()
++    os_.refresh_from_db()
++    assert es.schedule_next_run == NEXT_RUN_AFTER_DUE
++    assert os_.schedule_next_run == NEXT_RUN_AFTER_DUE
++
++

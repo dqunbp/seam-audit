@@ -1,0 +1,143 @@
+diff --git a/src/pretix/base/services/export.py b/src/pretix/base/services/export.py
+index 493bf71..c3aac8e 100644
+--- a/src/pretix/base/services/export.py
++++ b/src/pretix/base/services/export.py
+@@ -21,6 +21,7 @@
+ #
+ import logging
+ from datetime import timedelta
++from functools import partial
+ from typing import Any, Dict, Union
+ 
+ from celery.exceptions import MaxRetriesExceededError
+@@ -494,3 +495,30 @@ def scheduled_event_export(self, event: Event, schedule: int) -> None:
+     )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def run_scheduled_exports(sender, **kwargs):
++    # Runs all due scheduled exports, both event-level and organizer-level. The next run is stored before the task
++    # is published, so repeated or overlapping periodic runs do not start the same export twice. Publishing happens
++    # on commit, so a rolled-back batch does not leave orphaned tasks behind.
++    for model, task, scope_key in (
++        (ScheduledEventExport, scheduled_event_export, 'event'),
++        (ScheduledOrganizerExport, scheduled_organizer_export, 'organizer'),
++    ):
++        with transaction.atomic():
++            due = model.objects.select_for_update(
++                skip_locked=connection.features.has_select_for_update_skip_locked,
++                of=OF_SELF,
++            ).filter(schedule_next_run__lte=now())
++            for schedule in due:
++                schedule.compute_next_run()
++                schedule.save(update_fields=['schedule_next_run'])
++                transaction.on_commit(partial(
++                    task.apply_async,
++                    kwargs={
++                        scope_key: getattr(schedule, f'{scope_key}_id'),
++                        'schedule': schedule.pk,
++                    },
++                ))
++
++
+diff --git a/src/tests/base/test_export.py b/src/tests/base/test_export.py
+index 8ed4054..c6f723a 100644
+--- a/src/tests/base/test_export.py
++++ b/src/tests/base/test_export.py
+@@ -20,6 +20,7 @@
+ # <https://www.gnu.org/licenses/>.
+ #
+ from datetime import datetime, time, timedelta, timezone
++from unittest import mock
+ 
+ import pytest
+ from django.core import mail as djmail
+@@ -30,6 +31,7 @@ from freezegun import freeze_time
+ from pretix.base.models import (
+     Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,
+ )
++from pretix.base.services.export import run_scheduled_exports
+ 
+ 
+ @pytest.fixture(scope='function')
+@@ -57,3 +59,79 @@ def user(team):
+     return user
+ 
+ 
++@pytest.fixture
++def event_schedule(event, user):
++    return ScheduledEventExport.objects.create(
++        event=event, owner=user, export_identifier='orderlist', export_form_data={}, locale='en',
++        mail_subject='Export', mail_template='Here it is', schedule_rrule='FREQ=DAILY',
++        schedule_rrule_time=time(12, 0), schedule_next_run=datetime(2023, 6, 1, 9, 0, tzinfo=timezone.utc),
++    )
++
++
++@pytest.fixture
++def organizer_schedule(event, user):
++    return ScheduledOrganizerExport.objects.create(
++        organizer=event.organizer, owner=user, export_identifier='orderlist', export_form_data={}, locale='en',
++        mail_subject='Export', mail_template='Here it is', schedule_rrule='FREQ=DAILY',
++        schedule_rrule_time=time(12, 0), schedule_next_run=datetime(2023, 6, 1, 9, 0, tzinfo=timezone.utc),
++    )
++
++
++@pytest.mark.django_db
++@freeze_time('2023-06-01 10:00:00')
++def test_run_scheduled_event_export_dispatches_due_schedule(event, event_schedule, django_capture_on_commit_callbacks):
++    with mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as apply:
++        with django_capture_on_commit_callbacks(execute=True):
++            run_scheduled_exports(sender=None)
++    apply.assert_called_once_with(kwargs={'event': event.pk, 'schedule': event_schedule.pk})
++    event_schedule.refresh_from_db()
++    assert event_schedule.schedule_next_run > now()
++
++
++@pytest.mark.django_db
++@freeze_time('2023-06-01 10:00:00')
++def test_run_scheduled_organizer_export_dispatches_due_schedule(event, organizer_schedule,
++                                                                django_capture_on_commit_callbacks):
++    with mock.patch('pretix.base.services.export.scheduled_organizer_export.apply_async') as apply:
++        with django_capture_on_commit_callbacks(execute=True):
++            run_scheduled_exports(sender=None)
++    apply.assert_called_once_with(kwargs={'organizer': event.organizer.pk, 'schedule': organizer_schedule.pk})
++    organizer_schedule.refresh_from_db()
++    assert organizer_schedule.schedule_next_run > now()
++
++
++@pytest.mark.django_db
++@freeze_time('2023-06-01 10:00:00')
++def test_run_scheduled_export_does_not_dispatch_twice(event, event_schedule, django_capture_on_commit_callbacks):
++    with mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as apply:
++        with django_capture_on_commit_callbacks(execute=True):
++            run_scheduled_exports(sender=None)
++            run_scheduled_exports(sender=None)
++    assert apply.call_count == 1
++
++
++@pytest.mark.django_db
++@freeze_time('2023-06-01 10:00:00')
++def test_run_scheduled_export_skips_not_yet_due(event, event_schedule, django_capture_on_commit_callbacks):
++    future = datetime(2023, 6, 1, 15, 0, tzinfo=timezone.utc)
++    event_schedule.schedule_next_run = future
++    event_schedule.save(update_fields=['schedule_next_run'])
++    with mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as apply:
++        with django_capture_on_commit_callbacks(execute=True):
++            run_scheduled_exports(sender=None)
++    apply.assert_not_called()
++    event_schedule.refresh_from_db()
++    assert event_schedule.schedule_next_run == future
++
++
++@pytest.mark.django_db
++@freeze_time('2023-06-01 10:00:00')
++def test_run_scheduled_export_skips_finished_schedule(event, event_schedule, django_capture_on_commit_callbacks):
++    event_schedule.schedule_next_run = None
++    event_schedule.save(update_fields=['schedule_next_run'])
++    with mock.patch('pretix.base.services.export.scheduled_event_export.apply_async') as apply:
++        with django_capture_on_commit_callbacks(execute=True):
++            run_scheduled_exports(sender=None)
++    apply.assert_not_called()
++
++

@@ -1,0 +1,58 @@
+{
+  "run_id": "haiku/expire_orders/placebo/r3",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "expire_orders",
+  "condition": "placebo",
+  "rep": 3,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 80.2,
+  "cost_usd": 0.0178905,
+  "num_turns": 18,
+  "duration_s": 78.0,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 1,
+    "Bash": 9,
+    "Read": 2,
+    "Edit": 3
+  },
+  "files_read": [
+    "src/pretix/base/services/orders.py"
+  ],
+  "skills_invoked": [
+    "careful-dev"
+  ],
+  "bash_commands": [
+    "git status --short && git log --oneline -3 && grep -rn \"periodic_task\\|expire\" src/pretix/base/services/*.py src/pretix/celery_app.py src/pretix/base/celery*.py 2>/dev/null | head -60",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/placebo/r3/repo/src && grep -rn \"payment_term_expire_automatically\\|expire_orders\\|send_expiry_warnings\" --include=*.py . | grep -v \"/locale\" | head -30; echo ---; grep -n \"def minimum_interval\" -A12 pretix/base/services/*.py pretix/helpers/*.py 2>/dev/null | head -30; echo ---; ls tests/base | grep -i order; grep -n \"send_expiry_warnings\\|periodic\" tests/base/test_orders.py | head",
+    "sed -n 930,950p pretix/base/models/orders.py; echo ---; sed -n 1073,1082p pretix/base/settings.py; echo ---; sed -n 45,70p pretix/helpers/periodic.py 2>/dev/null | head -5; echo ---; sed -n 1,50p tests/base/test_orders.py | grep -n \"^from\\|^import\" | head -5; sed -n 670,700p tests/base/test_orders.py",
+    "grep -n \"^class \\|^from pretix.base.services.orders import\" tests/base/test_orders.py | head -40; sed -n 55,62p tests/base/test_orders.py; sed -n 650,668p tests/base/test_orders.py; sed -n 780,800p tests/base/test_orders.py",
+    "grep -n \"OrderFee\\b\" tests/base/test_orders.py | head -3; grep -n \"^from pretix.base.models import\" -A4 tests/base/test_orders.py | head -8; grep -n \"def classscope\" -A3 pretix/testutils/scope.py",
+    "timeout 580 python -m pytest tests/base/test_orders.py -k \"ExpireOrdersTests or PaymentReminderTests or DownloadReminderTests\" -q -p no:cacheprovider 2>&1 | tail -30",
+    "(python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -5; echo \"flake8 exit: $?\"); (python -m isort -c pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -3; echo \"isort done\")",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit: $?\"",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/placebo/r3/repo && git status --short && git diff --stat"
+  ],
+  "seam_table": false,
+  "output_chars": 3482,
+  "hidden": {
+    "base.test_orders::test_expiring": true,
+    "base.test_orders::test_expiring_paid_invoice": true,
+    "base.test_orders::test_expire_twice": true,
+    "base.test_orders::test_expire_skipped_if_canceled_with_fee": true,
+    "base.test_orders::test_expiring_auto_disabled": true,
+    "base.test_orders::test_expiring_auto_delayed": false,
+    "base.test_orders::test_expiring_auto_delayed_weekdays": true,
+    "base.test_orders::test_do_not_expire_if_approval_pending": true
+  },
+  "hidden_passed": 7,
+  "hidden_total": 8,
+  "visible_green": true,
+  "visible_passed": 430,
+  "visible_total": 430,
+  "diff_lines": 119
+}

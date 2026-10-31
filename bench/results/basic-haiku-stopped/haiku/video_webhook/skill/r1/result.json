@@ -1,0 +1,62 @@
+{
+  "run_id": "haiku/video_webhook/skill/r1",
+  "model": "haiku",
+  "task": "video_webhook",
+  "condition": "skill",
+  "rep": 1,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 94.8,
+  "cost_usd": 0.021252470000000002,
+  "num_turns": 18,
+  "duration_s": 90.1,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 10,
+    "Write": 2,
+    "Edit": 3
+  },
+  "files_read": [],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "cd /tmp/claude-0/-tmp-claude-0--home-user-seam-audit-4d868dbd-76d3-5c3d-a30c-fa647d6d00e0-scratchpad-runs-haiku-video-webhook-skill-r1-repo/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad 2>/dev/null; cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs/haiku/video_webhook/skill/r1/repo && git status --short && ls -la && find . -path ./.git -prune -o -type f -print | grep -v __pycache__ | head -200 && cat CLAUDE.md AGENTS.md 2>/dev/null",
+    "cat docs/lumen_api.md && echo ---- && cat pixforge/features/video.py",
+    "ls -la && find . -path ./.git -prune -o -type f -print | grep -v __pycache__ && cat CLAUDE.md AGENTS.md 2>/dev/null; echo ----; cat pixforge/jobs.py pixforge/features/common.py pixforge/billing.py 2>/dev/null",
+    "for f in pixforge/webhooks/*.py; do echo \"==== $f\"; cat \"$f\"; done; echo ==== db.py; cat pixforge/db.py; echo ==== migrations; cat pixforge/migrations/*.sql; echo ==== sweeper; cat pixforge/sweeper.py",
+    "echo ==== lumen_sdk; cat lumen_sdk/*.py; echo ==== tests; cat tests/conftest.py tests/fakes.py tests/test_video.py tests/test_payments_webhook.py; echo ==== readme pyproject; cat README.md pyproject.toml; echo ==== i18n; cat pixforge/i18n.py pixforge/locales/en.json; echo ==== clock; cat pixforge/clock.py pixforge/pricing.py",
+    "cat pixforge/webhooks/payments.py pixforge/webhooks/signing.py pixforge/webhooks/dedup.py pixforge/webhooks/__init__.py",
+    "cat pixforge/sweeper.py pixforge/db.py pixforge/migrations/001_init.sql pixforge/migrations/002_quota.sql pixforge/quota.py",
+    "cat tests/test_sweeper.py tests/test_billing.py | head -150; cat pixforge/features/generate.py | head -80; git log --oneline | head -5",
+    "python3 -m pytest -q 2>&1 | tail -40",
+    "python3 -m pytest -q tests/test_lumen_webhook.py 2>&1 | tail -3 && git status --short"
+  ],
+  "seam_table": false,
+  "output_chars": 3340,
+  "hidden": {
+    "test_completed_marks_job_succeeded_with_url": true,
+    "test_failed_marks_job_failed_and_refunds": true,
+    "test_progress_is_acknowledged_and_keeps_processing": true,
+    "test_wrong_signature_is_rejected": true,
+    "test_missing_signature_is_rejected": true,
+    "test_stale_signature_is_rejected": true,
+    "test_duplicate_failed_event_refunds_once": true,
+    "test_duplicate_completed_event_is_harmless": true,
+    "test_progress_after_completed_keeps_succeeded": true,
+    "test_failed_after_completed_does_not_refund": true,
+    "test_failed_after_sweeper_timeout_does_not_refund_twice": true,
+    "test_unknown_job_does_not_crash": true,
+    "test_moderated_completion_is_not_success": true,
+    "test_moderated_completion_is_refunded": true,
+    "test_no_direct_balance_writes": true
+  },
+  "hidden_passed": 15,
+  "hidden_total": 15,
+  "visible_green": true,
+  "visible_passed": 34,
+  "visible_total": 34,
+  "diff_lines": 255
+}

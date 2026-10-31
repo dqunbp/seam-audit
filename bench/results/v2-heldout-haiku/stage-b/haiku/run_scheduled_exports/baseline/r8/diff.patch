@@ -1,0 +1,186 @@
+diff --git a/src/pretix/base/services/export.py b/src/pretix/base/services/export.py
+index 493bf71..4e05cc8 100644
+--- a/src/pretix/base/services/export.py
++++ b/src/pretix/base/services/export.py
+@@ -494,3 +494,39 @@ def scheduled_event_export(self, event: Event, schedule: int) -> None:
+     )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def run_scheduled_exports(sender, **kwargs):
++    """
++    Find all scheduled exports (event-level and organizer-level) that are due, move them on to their next
++    run and queue the actual export task for them.
++    """
++    for schedule in ScheduledEventExport.objects.filter(
++        schedule_next_run__lte=now(),
++    ).select_related('event').order_by('schedule_next_run', 'pk'):
++        with transaction.atomic():
++            # Advance the schedule before queuing the task, so a concurrent or repeated run of this job does not
++            # queue the same export a second time.
++            schedule.compute_next_run()
++            schedule.save(update_fields=['schedule_next_run'])
++            scheduled_event_export.apply_async(
++                kwargs={
++                    'event': schedule.event_id,
++                    'schedule': schedule.pk,
++                },
++            )
++
++    for schedule in ScheduledOrganizerExport.objects.filter(
++        schedule_next_run__lte=now(),
++    ).order_by('schedule_next_run', 'pk'):
++        with transaction.atomic():
++            schedule.compute_next_run()
++            schedule.save(update_fields=['schedule_next_run'])
++            scheduled_organizer_export.apply_async(
++                kwargs={
++                    'organizer': schedule.organizer_id,
++                    'schedule': schedule.pk,
++                },
++            )
++
++
+diff --git a/src/tests/base/test_export.py b/src/tests/base/test_export.py
+index 8ed4054..1fbfd97 100644
+--- a/src/tests/base/test_export.py
++++ b/src/tests/base/test_export.py
+@@ -30,6 +30,8 @@ from freezegun import freeze_time
+ from pretix.base.models import (
+     Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,
+ )
++from pretix.base.services import export as export_service
++from pretix.base.services.export import run_scheduled_exports
+ 
+ 
+ @pytest.fixture(scope='function')
+@@ -57,3 +59,128 @@ def user(team):
+     return user
+ 
+ 
++@pytest.fixture
++def queued_tasks(monkeypatch):
++    """
++    Records what run_scheduled_exports dispatches instead of running the export tasks.
++    """
++    calls = []
++
++    def fake_apply_async(task_name):
++        def _apply_async(kwargs=None, **kw):
++            calls.append((task_name, kwargs))
++        return _apply_async
++
++    monkeypatch.setattr(export_service.scheduled_event_export, 'apply_async', fake_apply_async('event'))
++    monkeypatch.setattr(export_service.scheduled_organizer_export, 'apply_async', fake_apply_async('organizer'))
++    return calls
++
++
++@pytest.fixture
++def event_schedule(event, user):
++    return event.scheduled_exports.create(
++        export_identifier='orderlist',
++        export_form_data={},
++        owner=user,
++        locale='en',
++        schedule_rrule='DTSTART:20230101T000000\nRRULE:FREQ=DAILY',
++        schedule_rrule_time=time(4, 0),
++        schedule_next_run=now() - timedelta(minutes=5),
++        mail_subject='Export',
++        mail_template='Here it is.',
++    )
++
++
++@pytest.fixture
++def organizer_schedule(event, user):
++    return event.organizer.scheduled_exports.create(
++        export_identifier='orderlist',
++        export_form_data={},
++        owner=user,
++        locale='en',
++        schedule_rrule='DTSTART:20230101T000000\nRRULE:FREQ=DAILY',
++        schedule_rrule_time=time(4, 0),
++        schedule_next_run=now() - timedelta(minutes=5),
++        mail_subject='Export',
++        mail_template='Here it is.',
++        timezone='Europe/Berlin',
++    )
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_event_level(event, event_schedule, queued_tasks):
++    old_next_run = event_schedule.schedule_next_run
++
++    run_scheduled_exports(sender=None)
++
++    assert queued_tasks == [('event', {'event': event.pk, 'schedule': event_schedule.pk})]
++    event_schedule.refresh_from_db()
++    assert event_schedule.schedule_next_run > now()
++    assert event_schedule.schedule_next_run != old_next_run
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_organizer_level(event, organizer_schedule, queued_tasks):
++    run_scheduled_exports(sender=None)
++
++    assert queued_tasks == [
++        ('organizer', {'organizer': event.organizer.pk, 'schedule': organizer_schedule.pk})
++    ]
++    organizer_schedule.refresh_from_db()
++    assert organizer_schedule.schedule_next_run > now()
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_both_levels(event, event_schedule, organizer_schedule, queued_tasks):
++    run_scheduled_exports(sender=None)
++
++    assert sorted(name for name, _ in queued_tasks) == ['event', 'organizer']
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_not_due_yet(event, event_schedule, organizer_schedule, queued_tasks):
++    future = now() + timedelta(hours=3)
++    ScheduledEventExport.objects.filter(pk=event_schedule.pk).update(schedule_next_run=future)
++    ScheduledOrganizerExport.objects.filter(pk=organizer_schedule.pk).update(schedule_next_run=future)
++
++    run_scheduled_exports(sender=None)
++
++    assert queued_tasks == []
++    event_schedule.refresh_from_db()
++    organizer_schedule.refresh_from_db()
++    assert event_schedule.schedule_next_run == future
++    assert organizer_schedule.schedule_next_run == future
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_no_next_run(event, event_schedule, queued_tasks):
++    ScheduledEventExport.objects.filter(pk=event_schedule.pk).update(schedule_next_run=None)
++
++    run_scheduled_exports(sender=None)
++
++    assert queued_tasks == []
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_not_queued_twice(event, event_schedule, queued_tasks):
++    run_scheduled_exports(sender=None)
++    run_scheduled_exports(sender=None)
++
++    assert len(queued_tasks) == 1
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_advances_past_missed_runs(event, event_schedule, queued_tasks):
++    # Schedule was due a week ago (e.g. the periodic job was down); it runs once now and the next run is in
++    # the future, not one per missed day.
++    ScheduledEventExport.objects.filter(pk=event_schedule.pk).update(
++        schedule_next_run=now() - timedelta(days=7)
++    )
++
++    run_scheduled_exports(sender=None)
++
++    assert len(queued_tasks) == 1
++    event_schedule.refresh_from_db()
++    assert event_schedule.schedule_next_run > now()
++
++

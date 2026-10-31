@@ -1,0 +1,243 @@
+diff --git a/pixforge/features/generate.py b/pixforge/features/generate.py
+index 8991e29..dd3bfa3 100644
+--- a/pixforge/features/generate.py
++++ b/pixforge/features/generate.py
+@@ -3,8 +3,10 @@ import logging
+ 
+ from lumen_sdk import LumenClient, LumenError, LumenRateLimited
+ 
+-from .. import jobs
++from .. import clock, jobs, quota
+ from ..billing import InsufficientCredits, charge_credits
++from ..db import transaction
++from ..i18n import t
+ from ..images import save_image
+ from ..jobs import JobStatus
+ from ..pricing import price_for
+@@ -18,7 +20,8 @@ def generate_image(conn, client: LumenClient, user_id: int, prompt: str, request
+     """Generate one image from `prompt` and add it to the user's library.
+ 
+     `request_id` comes from the client app, which retries on network errors:
+-    a repeated request_id returns the original job's result without charging again.
++    a repeated request_id returns the original job's result without charging again
++    (nor taking another unit of the free plan's daily quota).
+ 
+     Returns {"ok": True, "job_id", "status", "url"} or
+             {"ok": False, "job_id", "status", "error_code", "message"}.
+@@ -28,32 +31,51 @@ def generate_image(conn, client: LumenClient, user_id: int, prompt: str, request
+         return response_for(existing, locale)
+ 
+     user = get_user(conn, user_id)
++    day = clock.today_utc()
++    limit = quota.limit_for("image", user["plan"])
+     cost = price_for("image", user["plan"])
+-    job_id = jobs.create_job(conn, user_id, "image", request_id, cost)
++    # Quota unit and job row commit together: if create_job fails (e.g. a racing
++    # duplicate request_id), the unit taken just before it is rolled back too.
++    with transaction(conn):
++        if limit is not None and not quota.consume(conn, user_id, "image", limit, day):
++            return {
++                "ok": False,
++                "job_id": None,
++                "status": None,
++                "error_code": "daily_image_limit",
++                "message": t("errors.daily_image_limit", locale, limit=limit),
++            }
++        job_id = jobs.create_job(conn, user_id, "image", request_id, cost)
+ 
+     try:
+         charge_credits(conn, user_id, cost, "image", f"charge:image:{request_id}")
+     except InsufficientCredits:
+-        fail_job(conn, job_id, "insufficient_credits", refund=False)
++        _fail(conn, job_id, "insufficient_credits", refund=False, user_id=user_id, limit=limit, day=day)
+         return response_for(jobs.get_job(conn, job_id), locale)
+ 
+     try:
+         result = client.generate_image(prompt)
+     except LumenRateLimited:
+-        fail_job(conn, job_id, "rate_limited", refund=True)
++        _fail(conn, job_id, "rate_limited", refund=True, user_id=user_id, limit=limit, day=day)
+         return response_for(jobs.get_job(conn, job_id), locale)
+     except LumenError:
+         log.exception("lumen generate_image failed for job %s", job_id)
+-        fail_job(conn, job_id, "provider_failed", refund=True)
++        _fail(conn, job_id, "provider_failed", refund=True, user_id=user_id, limit=limit, day=day)
+         return response_for(jobs.get_job(conn, job_id), locale)
+ 
+     # "filtered" is a normal 200 response with no images, not an exception.
+     if result.status != "succeeded" or not result.images:
+         log.info("lumen filtered job %s: %s", job_id, result.filter_reason)
+-        fail_job(conn, job_id, "content_filtered", refund=True)
++        _fail(conn, job_id, "content_filtered", refund=True, user_id=user_id, limit=limit, day=day)
+         return response_for(jobs.get_job(conn, job_id), locale)
+ 
+     output = result.images[0]
+     save_image(conn, user_id, output.url, output.width, output.height)
+     jobs.transition(conn, job_id, {JobStatus.PENDING}, JobStatus.SUCCEEDED, output_url=output.url)
+     return response_for(jobs.get_job(conn, job_id), locale)
++
++
++def _fail(conn, job_id: int, error_code: str, *, refund: bool, user_id: int, limit: int | None, day: str) -> None:
++    """Fail the job, and give back its free-plan quota unit if this call moved it to failed."""
++    if fail_job(conn, job_id, error_code, refund=refund) and limit is not None:
++        quota.release(conn, user_id, "image", day)
+diff --git a/pixforge/locales/en.json b/pixforge/locales/en.json
+index 76c2021..894b05c 100644
+--- a/pixforge/locales/en.json
++++ b/pixforge/locales/en.json
+@@ -4,6 +4,7 @@
+   "errors.rate_limited": "The service is busy right now. Please try again in a minute. Your credits have been refunded.",
+   "errors.content_filtered": "The result was blocked by the content filter. Your credits have been refunded.",
+   "errors.timed_out": "Generation took too long and was cancelled. Your credits have been refunded.",
++  "errors.daily_image_limit": "You have reached today's free plan limit of {limit} images.",
+   "errors.daily_video_limit": "You have reached today's free plan limit of {limit} videos.",
+   "errors.not_found": "Not found."
+ }
+diff --git a/pixforge/locales/ru.json b/pixforge/locales/ru.json
+index 18b4f23..d1b37bd 100644
+--- a/pixforge/locales/ru.json
++++ b/pixforge/locales/ru.json
+@@ -4,6 +4,7 @@
+   "errors.rate_limited": "Сервис сейчас перегружен. Попробуйте через минуту. Кредиты возвращены.",
+   "errors.content_filtered": "Результат заблокирован фильтром контента. Кредиты возвращены.",
+   "errors.timed_out": "Генерация заняла слишком много времени и была отменена. Кредиты возвращены.",
++  "errors.daily_image_limit": "Вы исчерпали дневной лимит бесплатного тарифа: {limit} изображений.",
+   "errors.daily_video_limit": "Вы исчерпали дневной лимит бесплатного тарифа: {limit} видео.",
+   "errors.not_found": "Не найдено."
+ }
+diff --git a/pixforge/quota.py b/pixforge/quota.py
+index 1cd9216..1e02ad9 100644
+--- a/pixforge/quota.py
++++ b/pixforge/quota.py
+@@ -5,6 +5,7 @@ from .db import transaction
+ # Free plan: maximum operations of each kind per UTC calendar day.
+ # Kinds not listed here are unlimited.
+ FREE_DAILY_LIMITS = {
++    "image": 5,
+     "video": 2,
+ }
+ 
+diff --git a/tests/test_generate.py b/tests/test_generate.py
+index c260c2f..4cad028 100644
+--- a/tests/test_generate.py
++++ b/tests/test_generate.py
+@@ -1,8 +1,16 @@
++import sqlite3
++from datetime import datetime, timedelta, timezone
++
++import pytest
+ from lumen_sdk import LumenAPIError, LumenRateLimited
+ 
++from pixforge import clock, jobs, quota
+ from pixforge.billing import get_balance
+ from pixforge.features.generate import generate_image
++from pixforge.features.video import start_video
++from pixforge.i18n import t
+ from pixforge.images import list_images
++from pixforge.users import create_user
+ 
+ 
+ def test_generates_and_charges(conn, lumen, user_id):
+@@ -57,3 +65,102 @@ def test_insufficient_credits_does_not_call_provider(conn, lumen):
+     assert response["error_code"] == "insufficient_credits"
+     assert "2" in response["message"]
+     assert lumen.calls == []
++
++
++def _generate_n(conn, lumen, user_id, n, prefix="req"):
++    return [generate_image(conn, lumen, user_id, f"p{i}", f"{prefix}-{i}") for i in range(n)]
++
++
++def test_free_plan_daily_image_limit(conn, lumen, user_id):
++    responses = _generate_n(conn, lumen, user_id, 6)
++    assert all(r["ok"] for r in responses[:5])
++    sixth = responses[5]
++    assert not sixth["ok"]
++    assert sixth["error_code"] == "daily_image_limit"
++    assert sixth["job_id"] is None
++    assert "5 images" in sixth["message"]
++    assert len(lumen.calls) == 5
++    assert get_balance(conn, user_id) == 90
++
++
++def test_daily_image_limit_message_is_localized(conn, lumen, user_id):
++    _generate_n(conn, lumen, user_id, 5)
++    response = generate_image(conn, lumen, user_id, "p", "req-6", locale="ru")
++    assert response["message"] == t("errors.daily_image_limit", "ru", limit=5)
++    assert "5 изображений" in response["message"]
++
++
++def test_image_limit_resets_at_utc_midnight(conn, lumen, user_id):
++    clock.set_now(datetime(2026, 3, 1, 23, 59, tzinfo=timezone.utc))
++    _generate_n(conn, lumen, user_id, 5)
++    assert not generate_image(conn, lumen, user_id, "p", "req-6")["ok"]
++
++    clock.set_now(datetime(2026, 3, 2, 0, 0, tzinfo=timezone.utc))
++    assert generate_image(conn, lumen, user_id, "p", "req-7")["ok"]
++
++
++def test_image_quota_is_keyed_by_utc_day(conn, lumen, user_id):
++    # 20:00 at UTC-5 is 01:00 the next day in UTC.
++    local = timezone(timedelta(hours=-5))
++    clock.set_now(datetime(2026, 3, 1, 20, 0, tzinfo=local))
++    _generate_n(conn, lumen, user_id, 1)
++    assert quota.used(conn, user_id, "image", "2026-03-02") == 1
++    assert quota.used(conn, user_id, "image", "2026-03-01") == 0
++
++
++def test_retry_does_not_take_quota(conn, lumen, user_id):
++    _generate_n(conn, lumen, user_id, 5)
++    again = generate_image(conn, lumen, user_id, "p0", "req-0")
++    assert again["ok"]
++    assert quota.used(conn, user_id, "image") == 5
++    assert len(lumen.calls) == 5
++
++
++def test_pro_plan_is_unlimited(conn, lumen, pro_user_id):
++    responses = _generate_n(conn, lumen, pro_user_id, 7)
++    assert all(r["ok"] for r in responses)
++    assert quota.used(conn, pro_user_id, "image") == 0
++
++
++def test_image_and_video_quotas_are_separate(conn, lumen, user_id):
++    callback = "https://pixforge.test/hooks/lumen"
++    assert start_video(conn, lumen, user_id, "v", "vid-1", callback)["ok"]
++    assert start_video(conn, lumen, user_id, "v", "vid-2", callback)["ok"]
++    assert generate_image(conn, lumen, user_id, "p", "req-1")["ok"]
++    assert quota.used(conn, user_id, "image") == 1
++
++
++def test_filtered_image_releases_quota(conn, lumen, user_id):
++    lumen.filter_next = True
++    assert not generate_image(conn, lumen, user_id, "p", "req-1")["ok"]
++    assert quota.used(conn, user_id, "image") == 0
++    _generate_n(conn, lumen, user_id, 5, prefix="ok")
++    assert quota.used(conn, user_id, "image") == 5
++
++
++def test_provider_error_releases_quota(conn, lumen, user_id):
++    lumen.fail_with = LumenAPIError(500, "internal", "boom")
++    assert not generate_image(conn, lumen, user_id, "p", "req-1")["ok"]
++    assert quota.used(conn, user_id, "image") == 0
++
++
++def test_rate_limit_releases_quota(conn, lumen, user_id):
++    lumen.fail_with = LumenRateLimited(5)
++    assert not generate_image(conn, lumen, user_id, "p", "req-1")["ok"]
++    assert quota.used(conn, user_id, "image") == 0
++
++
++def test_insufficient_credits_releases_quota(conn, lumen):
++    poor = create_user(conn, "poor@example.com", balance=1)
++    assert not generate_image(conn, lumen, poor, "p", "req-1")["ok"]
++    assert quota.used(conn, poor, "image") == 0
++
++
++def test_racing_duplicate_request_rolls_back_quota(conn, lumen, user_id, monkeypatch):
++    # Simulate a racing duplicate: the early duplicate check misses, so the
++    # INSERT into jobs hits the UNIQUE(request_id) constraint.
++    generate_image(conn, lumen, user_id, "p", "req-1")
++    monkeypatch.setattr(jobs, "get_job_by_request", lambda conn, request_id: None)
++    with pytest.raises(sqlite3.IntegrityError):
++        generate_image(conn, lumen, user_id, "p", "req-1")
++    assert quota.used(conn, user_id, "image") == 1

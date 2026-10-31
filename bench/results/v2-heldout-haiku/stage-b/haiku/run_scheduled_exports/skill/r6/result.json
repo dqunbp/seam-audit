@@ -1,0 +1,64 @@
+{
+  "run_id": "haiku/run_scheduled_exports/skill/r6",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "run_scheduled_exports",
+  "condition": "skill",
+  "rep": 6,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 107.0,
+  "cost_usd": 0.026389500000000003,
+  "num_turns": 27,
+  "duration_s": 104.9,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 7,
+    "Read": 9,
+    "Edit": 5,
+    "Bash": 3
+  },
+  "files_read": [
+    "src/pretix/base/models/exports.py",
+    "src/pretix/base/services/export.py",
+    "src/pretix/base/services/invoices.py",
+    "src/pretix/base/services/mail.py",
+    "src/pretix/control/views/orders.py",
+    "src/pretix/control/views/organizer.py",
+    "src/tests/base/test_export.py",
+    "src/tests/base/test_runperiodic.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-stageB/haiku/run_scheduled_exports/skill/r6/repo/src && timeout 580 python -m pytest tests/base/test_export.py tests/base/test_runperiodic.py -q -p no:cacheprovider 2>&1 | tail -30",
+    "(python -m flake8 pretix/base/services/export.py tests/base/test_export.py 2>&1 | head -20; echo \"flake8 exit: $?\") ; (python -m isort --check-only --diff pretix/base/services/export.py tests/base/test_export.py 2>&1 | head -20; echo \"isort done\")",
+    "python -m flake8 pretix/base/services/export.py tests/base/test_export.py; echo \"flake8 exit $?\""
+  ],
+  "seam_table": true,
+  "output_chars": 5686,
+  "hidden": {
+    "base.test_export::test_event_run_sets_new_time": true,
+    "base.test_export::test_event_not_run_when_failed_5_times": false,
+    "base.test_export::test_event_fail_invalid_config": true,
+    "base.test_export::test_event_fail_user_inactive": true,
+    "base.test_export::test_event_fail_user_no_permission": true,
+    "base.test_export::test_organizer_run_sets_new_time": true,
+    "base.test_export::test_organizer_not_run_when_failed_5_times": false,
+    "base.test_export::test_organizer_fail_invalid_config": true,
+    "base.test_export::test_organizer_fail_user_inactive": true,
+    "base.test_export::test_organizer_fail_user_does_not_have_specific_permission": true,
+    "base.test_export::test_event_ok": true,
+    "base.test_export::test_organizer_limited_to_events": true,
+    "base.test_export::test_organizer_ok": true
+  },
+  "hidden_passed": 11,
+  "hidden_total": 13,
+  "visible_green": true,
+  "visible_passed": 4,
+  "visible_total": 4,
+  "diff_lines": 117
+}

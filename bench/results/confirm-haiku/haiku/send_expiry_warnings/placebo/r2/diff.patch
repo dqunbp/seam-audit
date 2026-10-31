@@ -1,0 +1,174 @@
+diff --git a/src/pretix/base/services/orders.py b/src/pretix/base/services/orders.py
+index 4672b24..27c0c9e 100644
+--- a/src/pretix/base/services/orders.py
++++ b/src/pretix/base/services/orders.py
+@@ -1561,6 +1561,47 @@ def send_download_reminders(sender, **kwargs):
+                                 )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def send_expiry_warnings(sender, **kwargs):
++    event_id = None
++    days = None
++
++    qs = Order.objects.filter(
++        status=Order.STATUS_PENDING,
++        expiry_reminder_sent=False,
++        require_approval=False,
++        valid_if_pending=False,
++    ).prefetch_related('event').order_by('event_id')
++    for o in qs:
++        if o.event_id != event_id:
++            days = o.event.settings.get('mail_days_order_expire_warning', as_type=int)
++            event_id = o.event_id
++        if not days:
++            continue
++
++        deadline = o.payment_term_expire_date
++        if now() >= deadline or now() < deadline - timedelta(days=days):
++            continue
++
++        with transaction.atomic():
++            o = Order.objects.select_for_update(of=OF_SELF).get(pk=o.pk)
++            if o.expiry_reminder_sent or o.status != Order.STATUS_PENDING:
++                # Race condition
++                continue
++
++            o.expiry_reminder_sent = True
++            o.save(update_fields=['expiry_reminder_sent'])
++            with language(o.locale, o.event.settings.region):
++                email_template = o.event.settings.mail_text_order_expire_warning
++                email_subject = o.event.settings.mail_subject_order_expire_warning
++                email_context = get_email_context(event=o.event, order=o, pending_sum=o.pending_sum)
++                o.send_mail(
++                    email_subject, email_template, email_context,
++                    'pretix.event.order.email.expire_warning_sent'
++                )
++
++
+ def notify_user_changed_order(order, user=None, auth=None, invoices=[]):
+     with language(order.locale, order.event.settings.region):
+         email_template = order.event.settings.mail_text_order_changed
+diff --git a/src/tests/base/test_orders.py b/src/tests/base/test_orders.py
+index b917338..d46b6f2 100644
+--- a/src/tests/base/test_orders.py
++++ b/src/tests/base/test_orders.py
+@@ -56,6 +56,7 @@ from pretix.base.services.invoices import (
+ from pretix.base.services.orders import (
+     OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,
+     deny_order, expire_orders, reactivate_order, send_download_reminders,
++    send_expiry_warnings,
+ )
+ from pretix.plugins.banktransfer.payment import BankTransfer
+ from pretix.testutils.mock import mocker_context
+@@ -1125,6 +1126,109 @@ class DownloadReminderTests(TestCase):
+         assert len(djmail.outbox) == 0
+ 
+ 
++class ExpiryWarningTests(TestCase):
++    def setUp(self):
++        super().setUp()
++        self.o = Organizer.objects.create(name='Dummy', slug='dummy')
++        with scope(organizer=self.o):
++            self.event = Event.objects.create(
++                organizer=self.o, name='Dummy', slug='dummy',
++                date_from=now() + timedelta(days=30),
++                plugins='pretix.plugins.banktransfer,tests.testdummy'
++            )
++            self.order = Order.objects.create(
++                code='FOO', event=self.event, email='dummy@dummy.test',
++                status=Order.STATUS_PENDING, locale='en',
++                datetime=now() - timedelta(days=1),
++                expires=now() + timedelta(days=2),
++                total=Decimal('46.00'),
++                sales_channel=self.event.organizer.sales_channels.get(identifier="web"),
++            )
++            self.ticket = Item.objects.create(event=self.event, name='Early-bird ticket',
++                                              default_price=Decimal('23.00'), admission=True)
++            OrderPosition.objects.create(
++                order=self.order, item=self.ticket, variation=None,
++                price=Decimal("46.00"), attendee_name_parts={"full_name": "Peter"}, positionid=1
++            )
++            self.event.settings.mail_days_order_expire_warning = 3
++            djmail.outbox = []
++
++    @classscope(attr='o')
++    def test_sends_within_window(self):
++        send_expiry_warnings(sender=self.event)
++        assert len(djmail.outbox) == 1
++        assert djmail.outbox[0].to == ['dummy@dummy.test']
++        self.order.refresh_from_db()
++        assert self.order.expiry_reminder_sent
++        assert self.order.all_logentries().last().action_type == 'pretix.event.order.email.expire_warning_sent'
++
++    @classscope(attr='o')
++    def test_sent_only_once(self):
++        send_expiry_warnings(sender=self.event)
++        send_expiry_warnings(sender=self.event)
++        assert len(djmail.outbox) == 1
++
++    @classscope(attr='o')
++    def test_not_sent_before_window(self):
++        self.event.settings.mail_days_order_expire_warning = 1
++        send_expiry_warnings(sender=self.event)
++        assert len(djmail.outbox) == 0
++        self.order.refresh_from_db()
++        assert not self.order.expiry_reminder_sent
++
++    @classscope(attr='o')
++    def test_disabled_when_zero_days(self):
++        self.event.settings.mail_days_order_expire_warning = 0
++        send_expiry_warnings(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++    @classscope(attr='o')
++    def test_not_sent_after_deadline(self):
++        self.order.expires = now() - timedelta(hours=1)
++        self.order.save()
++        send_expiry_warnings(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++    @classscope(attr='o')
++    def test_not_sent_for_paid_order(self):
++        self.order.status = Order.STATUS_PAID
++        self.order.save()
++        send_expiry_warnings(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++    @classscope(attr='o')
++    def test_not_sent_for_canceled_order(self):
++        self.order.status = Order.STATUS_CANCELED
++        self.order.save()
++        send_expiry_warnings(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++    @classscope(attr='o')
++    def test_not_sent_for_order_requiring_approval(self):
++        self.order.require_approval = True
++        self.order.save()
++        send_expiry_warnings(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++    @classscope(attr='o')
++    def test_not_sent_for_order_valid_if_pending(self):
++        self.order.valid_if_pending = True
++        self.order.save()
++        send_expiry_warnings(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++    @classscope(attr='o')
++    def test_uses_payment_term_expire_date(self):
++        # Deadline is pushed out by the payment term delay, so the window moves with it
++        self.event.settings.payment_term_expire_delay_days = 10
++        send_expiry_warnings(sender=self.event)
++        assert len(djmail.outbox) == 0
++
++        self.event.settings.payment_term_expire_delay_days = 0
++        send_expiry_warnings(sender=self.event)
++        assert len(djmail.outbox) == 1
++
++
+ class OrderCancelTests(TestCase):
+     def setUp(self):
+         super().setUp()

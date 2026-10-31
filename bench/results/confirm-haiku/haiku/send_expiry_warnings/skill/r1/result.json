@@ -1,0 +1,67 @@
+{
+  "run_id": "haiku/send_expiry_warnings/skill/r1",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "send_expiry_warnings",
+  "condition": "skill",
+  "rep": 1,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 210.2,
+  "cost_usd": 0.03200618,
+  "num_turns": 31,
+  "duration_s": 208.2,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 15,
+    "Grep": 2,
+    "Read": 4,
+    "Edit": 7
+  },
+  "files_read": [
+    "src/pretix/base/services/mail.py",
+    "src/pretix/base/services/orders.py",
+    "src/tests/base/test_orders.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "ls; cat CLAUDE.md AGENTS.md 2>/dev/null | head -150; git status --short | head; grep -rn \"expire_warning\\|send_expiry\\|expiry_warning\" src/pretix --include=*.py | head -40",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/skill/r1/repo/src && sed -n 2695,2730p pretix/base/settings.py; echo ----; sed -n 1,140p pretix/plugins/banktransfer/tasks.py; echo ----; grep -rn \"periodic_task\\|@receiver(periodic\" pretix --include=*.py | head -30",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/skill/r1/repo && git log --oneline -3; git log -S\"expire_warning\" --oneline -- src/pretix | head -10; cd src; grep -n \"^def \\|^class \\|^from \\|^import \\|periodic\" pretix/base/services/orders.py | head -120",
+    "git -C /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/skill/r1/repo log --oneline -3; git -C /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/skill/r1/repo log -S\"send_expiry_warnings\" --oneline | head -5; grep -n \"^def \\|^class \\|^from \\|^import \\|periodic\" /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/skill/r1/repo/src/pretix/base/services/orders.py | head -150",
+    "sed -n 286,300p pretix/base/models/orders.py; echo ----; grep -n \"def payment_term_expire_date\\|def payment_term_last\\|def send_mail\\|def ticket_download_available\" -A22 pretix/base/models/orders.py | sed -n 1,140p; echo ----; grep -rn \"expiry_reminder_sent\\|expire_warning\" pretix tests --include=*.py | grep -v migrations | head -30",
+    "grep -rn \"expire_date\" pretix/base/email.py pretix/base/services/mail.py | head; echo ----; grep -rln \"expire_orders\\|send_download_reminders\" tests | head; echo ----; grep -n \"def test_.*expire\\|def test_.*reminder\" tests/base/test_orders.py | head -40; echo ----; sed -n 2731,2745p pretix/base/settings.py; echo ----; grep -n \"def extend_order\" -A30 pretix/base/services/orders.py | grep -n \"reminder\\|expire\\|save\" ",
+    "grep -rn \"'expire_date'\\|\\\"expire_date\\\"\\|expire_date=\" pretix --include=*.py | grep -v migrations | head; echo ----; grep -n \"mail_days_order_pending\\|mail_days_order_expire\" pretix/base/settings.py; echo ----; sed -n 1,40p tests/base/test_orders.py | grep -n \"import\\|^from\" ; echo ----; sed -n 380,410p tests/base/test_orders.py; echo ----; sed -n 1060,1130p tests/base/test_orders.py",
+    "sed -n 1159,1200p pretix/base/models/orders.py | grep -v \"^\\s*$\" | head -45; echo ----; sed -n 285,350p pretix/base/services/orders.py; echo ----; grep -n \"^def event\\|^def order\\b\\|fixture\" -A3 tests/base/test_orders.py | head -30",
+    "sed -n 40,64p tests/base/test_orders.py; grep -n \"extend_order\\|LogEntry\" tests/base/test_orders.py | head -5",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k \"expiry_warning or expire or download_reminder or extend\" -q -p no:cacheprovider 2>&1 | tail -40",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k \"expiry_warning or expire or download_reminder or extend\" -q -p no:cacheprovider 2>&1 | tail -15; python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -5; python -m isort --check-only --diff pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -20",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k \"expiry_warning or expire or download_reminder or extend\" -q -p no:cacheprovider",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit $?\"",
+    "python -m flake8 /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/skill/r1/repo/src/pretix/base/services/orders.py /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/skill/r1/repo/src/tests/base/test_orders.py",
+    "timeout 900 python -m pytest tests/base/test_orders.py -q -p no:cacheprovider 2>&1 | tail -15"
+  ],
+  "seam_table": false,
+  "output_chars": 5384,
+  "hidden": {
+    "base.test_orders.PaymentReminderTests::test_disabled": true,
+    "base.test_orders.PaymentReminderTests::test_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail": false,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_confirmed_but_not_all_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_failed_state": true,
+    "base.test_orders.PaymentReminderTests::test_sent_days": true,
+    "base.test_orders.PaymentReminderTests::test_sent_no_expiry": false,
+    "base.test_orders.PaymentReminderTests::test_sent_not_immediately_after_purchase": false,
+    "base.test_orders.PaymentReminderTests::test_sent_once": true
+  },
+  "hidden_passed": 6,
+  "hidden_total": 9,
+  "visible_green": true,
+  "visible_passed": 432,
+  "visible_total": 432,
+  "diff_lines": 166
+}

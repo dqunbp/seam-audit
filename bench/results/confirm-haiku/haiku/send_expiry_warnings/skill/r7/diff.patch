@@ -1,0 +1,187 @@
+diff --git a/src/pretix/base/services/orders.py b/src/pretix/base/services/orders.py
+index 4672b24..96d190c 100644
+--- a/src/pretix/base/services/orders.py
++++ b/src/pretix/base/services/orders.py
+@@ -1457,6 +1457,56 @@ def expire_orders(sender, **kwargs):
+             mark_order_expired(o)
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def send_expiry_warnings(sender, **kwargs):
++    event_id = None
++    days = None
++
++    qs = Order.objects.filter(
++        status=Order.STATUS_PENDING,
++        expiry_reminder_sent=False,
++        expires__gt=now(),
++        valid_if_pending=False,
++        require_approval=False,
++        email__isnull=False,
++    ).exclude(
++        email=''
++    ).exclude(
++        Exists(
++            OrderFee.objects.filter(order_id=OuterRef('pk'), fee_type=OrderFee.FEE_TYPE_CANCELLATION)
++        )
++    ).prefetch_related('event').order_by('event_id')
++
++    for o in qs:
++        if o.event_id != event_id:
++            days = o.event.settings.get('mail_days_order_expire_warning', as_type=int)
++            event_id = o.event_id
++        if not days or now() < o.expires - timedelta(days=days):
++            continue
++
++        with transaction.atomic():
++            o = Order.objects.select_for_update(of=OF_SELF).get(pk=o.pk)
++            if o.expiry_reminder_sent or o.status != Order.STATUS_PENDING:
++                # Race condition
++                continue
++            o.expiry_reminder_sent = True
++            o.save(update_fields=['expiry_reminder_sent'])
++
++        try:
++            with language(o.locale, o.event.settings.region):
++                email_template = o.event.settings.mail_text_order_expire_warning
++                email_context = get_email_context(event=o.event, order=o)
++                email_subject = o.event.settings.mail_subject_order_expire_warning
++                o.send_mail(
++                    email_subject, email_template, email_context,
++                    'pretix.event.order.email.expire_warning_sent',
++                )
++        except Exception:
++            logger.exception('Could not send order expiry warning for order %s', o.code)
++            Order.objects.filter(pk=o.pk).update(expiry_reminder_sent=False)
++
++
+ @receiver(signal=periodic_task)
+ @scopes_disabled()
+ def send_download_reminders(sender, **kwargs):
+diff --git a/src/tests/base/test_orders.py b/src/tests/base/test_orders.py
+index b917338..f06d440 100644
+--- a/src/tests/base/test_orders.py
++++ b/src/tests/base/test_orders.py
+@@ -23,6 +23,7 @@ import json
+ import zoneinfo
+ from datetime import date, datetime, timedelta
+ from decimal import Decimal
++from unittest import mock
+ from zoneinfo import ZoneInfo
+ 
+ import pytest
+@@ -56,6 +57,7 @@ from pretix.base.services.invoices import (
+ from pretix.base.services.orders import (
+     OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,
+     deny_order, expire_orders, reactivate_order, send_download_reminders,
++    send_expiry_warnings,
+ )
+ from pretix.plugins.banktransfer.payment import BankTransfer
+ from pretix.testutils.mock import mocker_context
+@@ -350,6 +352,105 @@ def test_expiring(event):
+     assert o2.transactions.aggregate(s=Sum(F('price') * F('count')))['s'] == Decimal('0.00')
+ 
+ 
++def _pending_order(event, code='FOO', expires=None, **kwargs):
++    fields = dict(
++        code=code, event=event, email='dummy@dummy.test',
++        status=Order.STATUS_PENDING, locale='en',
++        datetime=now(), expires=expires or now() + timedelta(days=2),
++        total=Decimal('23.00'),
++        sales_channel=event.organizer.sales_channels.get(identifier="web"),
++    )
++    fields.update(kwargs)
++    return Order.objects.create(**fields)
++
++
++@pytest.mark.django_db
++def test_expiry_warning_sent_once_within_window(event):
++    event.settings.mail_days_order_expire_warning = 3
++    o = _pending_order(event)
++    djmail.outbox = []
++
++    send_expiry_warnings(None)
++    send_expiry_warnings(None)
++
++    assert len(djmail.outbox) == 1
++    assert djmail.outbox[0].to == ['dummy@dummy.test']
++    assert 'expire' in djmail.outbox[0].subject.lower()
++    o.refresh_from_db()
++    assert o.expiry_reminder_sent is True
++    assert o.all_logentries().filter(action_type='pretix.event.order.email.expire_warning_sent').count() == 1
++
++
++@pytest.mark.django_db
++def test_expiry_warning_not_sent_before_window(event):
++    event.settings.mail_days_order_expire_warning = 3
++    o = _pending_order(event, expires=now() + timedelta(days=10))
++    djmail.outbox = []
++
++    send_expiry_warnings(None)
++
++    assert len(djmail.outbox) == 0
++    o.refresh_from_db()
++    assert o.expiry_reminder_sent is False
++
++
++@pytest.mark.django_db
++def test_expiry_warning_disabled_with_zero_days(event):
++    event.settings.mail_days_order_expire_warning = 0
++    _pending_order(event)
++    djmail.outbox = []
++
++    send_expiry_warnings(None)
++
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_expiry_warning_skips_expired_paid_and_unexpirable_orders(event):
++    event.settings.mail_days_order_expire_warning = 3
++    _pending_order(event, code='EXP', expires=now() - timedelta(hours=1))
++    _pending_order(event, code='PAI', status=Order.STATUS_PAID)
++    _pending_order(event, code='VIP', valid_if_pending=True)
++    _pending_order(event, code='APP', require_approval=True)
++    djmail.outbox = []
++
++    send_expiry_warnings(None)
++
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_expiry_warning_skips_order_without_email_and_keeps_flag_clear(event):
++    event.settings.mail_days_order_expire_warning = 3
++    o = _pending_order(event, code='NOM', email='')
++    djmail.outbox = []
++
++    send_expiry_warnings(None)
++
++    assert len(djmail.outbox) == 0
++    o.refresh_from_db()
++    assert o.expiry_reminder_sent is False
++
++
++@pytest.mark.django_db
++def test_expiry_warning_flag_reset_on_send_failure(event):
++    event.settings.mail_days_order_expire_warning = 3
++    o = _pending_order(event)
++    djmail.outbox = []
++
++    with mock.patch.object(Order, 'send_mail', side_effect=Exception('boom')):
++        send_expiry_warnings(None)
++    o.refresh_from_db()
++    assert o.expiry_reminder_sent is False
++    assert len(djmail.outbox) == 0
++
++    # The next run picks the order up again
++    send_expiry_warnings(None)
++    assert len(djmail.outbox) == 1
++    o.refresh_from_db()
++    assert o.expiry_reminder_sent is True
++
++
+ @pytest.mark.django_db
+ def test_expiring_paid_invoice(event):
+     o2 = Order.objects.create(

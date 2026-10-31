@@ -1,0 +1,216 @@
+diff --git a/src/pretix/base/services/orders.py b/src/pretix/base/services/orders.py
+index 072a969..b43283e 100644
+--- a/src/pretix/base/services/orders.py
++++ b/src/pretix/base/services/orders.py
+@@ -1516,6 +1516,71 @@ def send_expiry_warnings(sender, **kwargs):
+                     )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++@minimum_interval(minutes_after_success=60)
++def send_download_reminders(sender, **kwargs):
++    """
++    Sends the ticket download reminder for paid orders once the date configured with
++    ``mail_days_download_reminder`` has been reached. Orders placed after that date are only marked as
++    reminded, since their buyers received the tickets with the order confirmation already.
++    """
++    event_id = None
++    settings = None
++    reminder_date = None
++    days_setting_applies = False
++
++    for o in Order.objects.filter(
++            status=Order.STATUS_PAID, download_reminder_sent=False, event__date_from__gt=now(),
++    ).select_related('event', 'sales_channel').order_by('event_id'):
++        if o.event_id != event_id:
++            event_id = o.event_id
++            settings = o.event.settings
++            # Mirrors the timeline: reminders are only planned for events without date series
++            days = settings.get('mail_days_download_reminder', as_type=int)
++            days_setting_applies = (
++                days is not None and settings.ticket_download and not o.event.has_subevents
++            )
++            if days_setting_applies:
++                reminder_date = (o.event.date_from - timedelta(days=days)).replace(
++                    hour=0, minute=0, second=0, microsecond=0
++                )
++
++        if not days_setting_applies or now() < reminder_date:
++            continue
++        if o.sales_channel.identifier not in settings.mail_sales_channel_download_reminder:
++            continue
++
++        if o.datetime >= reminder_date:
++            Order.objects.filter(pk=o.pk).update(download_reminder_sent=True)
++            continue
++
++        with transaction.atomic():
++            o = Order.objects.select_related('event').select_for_update(of=OF_SELF).get(pk=o.pk)
++            if o.status != Order.STATUS_PAID or o.download_reminder_sent or not o.ticket_download_available:
++                # Race condition, or tickets are not downloadable yet (e.g. ticket_download_date in the future)
++                continue
++
++            with language(o.locale, settings.region):
++                o.download_reminder_sent = True
++                o.save(update_fields=['download_reminder_sent'])
++                email_context = get_email_context(event=o.event, order=o)
++                o.send_mail(
++                    settings.mail_subject_download_reminder, settings.mail_text_download_reminder, email_context,
++                    'pretix.event.order.email.download_reminder_sent', attach_tickets=True,
++                )
++
++                if settings.mail_send_download_reminder_attendee:
++                    for p in o.positions.all():
++                        if p.addon_to_id is None and p.attendee_email and p.attendee_email != o.email:
++                            p.send_mail(
++                                settings.mail_subject_download_reminder_attendee,
++                                settings.mail_text_download_reminder_attendee,
++                                get_email_context(event=o.event, order=o, position=p),
++                                'pretix.event.order.email.download_reminder_sent', attach_tickets=True,
++                            )
++
++
+ def notify_user_changed_order(order, user=None, auth=None, invoices=[]):
+     with language(order.locale, order.event.settings.region):
+         email_template = order.event.settings.mail_text_order_changed
+diff --git a/src/tests/base/test_orders.py b/src/tests/base/test_orders.py
+index a004b9a..a96bb3c 100644
+--- a/src/tests/base/test_orders.py
++++ b/src/tests/base/test_orders.py
+@@ -55,7 +55,7 @@ from pretix.base.services.invoices import (
+ )
+ from pretix.base.services.orders import (
+     OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,
+-    deny_order, expire_orders, reactivate_order, send_expiry_warnings,
++    deny_order, expire_orders, reactivate_order, send_download_reminders, send_expiry_warnings,
+ )
+ from pretix.plugins.banktransfer.payment import BankTransfer
+ from pretix.testutils.mock import mocker_context
+@@ -4481,3 +4481,126 @@ def test_autocreate_medium(event):
+     op = order.positions.first()
+     m = op.linked_media.get()
+     assert m.type == "barcode"
++
++
++def _download_reminder_order(event, email='dummy@example.org', datetime_=None, status=Order.STATUS_PAID, code='FOO'):
++    order = Order.objects.create(
++        code=code, event=event, email=email, status=status, locale='en',
++        datetime=datetime_ or now() - timedelta(days=10),
++        expires=now() + timedelta(days=10), total=Decimal('23.00'),
++        sales_channel=event.organizer.sales_channels.get(identifier="web"),
++    )
++    item = Item.objects.create(event=event, name='Ticket', default_price=Decimal('23.00'), admission=True)
++    OrderPosition.objects.create(
++        order=order, item=item, variation=None, price=Decimal("23.00"),
++        attendee_name_parts={'full_name': "Peter"}, positionid=1,
++    )
++    return order
++
++
++@pytest.fixture
++def download_reminder_event(event):
++    # Event starts in 3 days, reminder is configured for 3 days before the event
++    event.date_from = now() + timedelta(days=3)
++    event.save()
++    event.settings.set('ticket_download', True)
++    event.settings.set('mail_days_download_reminder', 3)
++    djmail.outbox = []
++    return event
++
++
++@pytest.mark.django_db
++def test_download_reminder_disabled_if_no_days_configured(download_reminder_event):
++    download_reminder_event.settings.delete('mail_days_download_reminder')
++    _download_reminder_order(download_reminder_event)
++    send_download_reminders(sender=download_reminder_event)
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_download_reminder_not_before_reminder_date(download_reminder_event):
++    download_reminder_event.settings.set('mail_days_download_reminder', 1)
++    o = _download_reminder_order(download_reminder_event)
++    send_download_reminders(sender=download_reminder_event)
++    assert len(djmail.outbox) == 0
++    o.refresh_from_db()
++    assert not o.download_reminder_sent
++
++
++@pytest.mark.django_db
++def test_download_reminder_sent_once_with_tickets(download_reminder_event):
++    o = _download_reminder_order(download_reminder_event)
++    send_download_reminders(sender=download_reminder_event)
++    assert len(djmail.outbox) == 1
++    assert djmail.outbox[0].to == ['dummy@example.org']
++    o.refresh_from_db()
++    assert o.download_reminder_sent
++    assert o.all_logentries().filter(action_type='pretix.event.order.email.download_reminder_sent').exists()
++
++    djmail.outbox = []
++    send_download_reminders(sender=download_reminder_event)
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_download_reminder_skipped_for_unpaid_orders(download_reminder_event):
++    o = _download_reminder_order(download_reminder_event, status=Order.STATUS_PENDING)
++    send_download_reminders(sender=download_reminder_event)
++    assert len(djmail.outbox) == 0
++    o.refresh_from_db()
++    assert not o.download_reminder_sent
++
++
++@pytest.mark.django_db
++def test_download_reminder_skipped_if_ticket_download_disabled(download_reminder_event):
++    download_reminder_event.settings.set('ticket_download', False)
++    _download_reminder_order(download_reminder_event)
++    send_download_reminders(sender=download_reminder_event)
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_download_reminder_respects_sales_channel_setting(download_reminder_event):
++    download_reminder_event.settings.set('mail_sales_channel_download_reminder', ['bogus'])
++    o = _download_reminder_order(download_reminder_event)
++    send_download_reminders(sender=download_reminder_event)
++    assert len(djmail.outbox) == 0
++    o.refresh_from_db()
++    assert not o.download_reminder_sent
++
++
++@pytest.mark.django_db
++def test_download_reminder_skipped_for_orders_placed_after_reminder_date(download_reminder_event):
++    o = _download_reminder_order(download_reminder_event, datetime_=now() - timedelta(hours=1))
++    send_download_reminders(sender=download_reminder_event)
++    assert len(djmail.outbox) == 0
++    o.refresh_from_db()
++    assert o.download_reminder_sent
++
++
++@pytest.mark.django_db
++def test_download_reminder_skipped_for_past_events(download_reminder_event):
++    download_reminder_event.date_from = now() - timedelta(days=1)
++    download_reminder_event.save()
++    _download_reminder_order(download_reminder_event)
++    send_download_reminders(sender=download_reminder_event)
++    assert len(djmail.outbox) == 0
++
++
++@pytest.mark.django_db
++def test_download_reminder_to_attendees_if_enabled(download_reminder_event):
++    download_reminder_event.settings.set('mail_send_download_reminder_attendee', True)
++    o = _download_reminder_order(download_reminder_event)
++    o.positions.update(attendee_email='attendee@example.org')
++    send_download_reminders(sender=download_reminder_event)
++    assert len(djmail.outbox) == 2
++    assert {m.to[0] for m in djmail.outbox} == {'dummy@example.org', 'attendee@example.org'}
++
++
++@pytest.mark.django_db
++def test_download_reminder_no_attendee_mail_if_disabled(download_reminder_event):
++    o = _download_reminder_order(download_reminder_event)
++    o.positions.update(attendee_email='attendee@example.org')
++    send_download_reminders(sender=download_reminder_event)
++    assert len(djmail.outbox) == 1
++    assert djmail.outbox[0].to == ['dummy@example.org']

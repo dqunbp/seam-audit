@@ -1,0 +1,149 @@
+diff --git a/src/pretix/base/services/orders.py b/src/pretix/base/services/orders.py
+index dc949fe..1b52382 100644
+--- a/src/pretix/base/services/orders.py
++++ b/src/pretix/base/services/orders.py
+@@ -1492,6 +1492,31 @@ def send_expiry_warnings(sender, **kwargs):
+                     )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def expire_orders(sender, **kwargs):
++    """
++    Marks pending orders as expired once their payment deadline (including the configured
++    payment term delay) has passed, provided the event has automatic expiry enabled.
++    """
++    for o in Order.objects.filter(
++            status=Order.STATUS_PENDING, expires__lt=now(),
++            require_approval=False, valid_if_pending=False,
++    ).select_related('event').order_by('event_id'):
++        if not o.event.settings.payment_term_expire_automatically:
++            continue
++        if o.payment_term_expire_date > now():
++            continue
++
++        with transaction.atomic():
++            o = Order.objects.select_related('event').select_for_update(of=OF_SELF).get(pk=o.pk)
++            if o.status != Order.STATUS_PENDING or o.payment_term_expire_date > now():
++                # Race condition
++                continue
++
++            mark_order_expired(o)
++
++
+ @receiver(signal=periodic_task)
+ @scopes_disabled()
+ def send_download_reminders(sender, **kwargs):
+diff --git a/src/tests/base/test_orders.py b/src/tests/base/test_orders.py
+index 018e28e..8a3902e 100644
+--- a/src/tests/base/test_orders.py
++++ b/src/tests/base/test_orders.py
+@@ -55,7 +55,7 @@ from pretix.base.services.invoices import (
+ )
+ from pretix.base.services.orders import (
+     OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,
+-    deny_order, reactivate_order, send_download_reminders,
++    deny_order, expire_orders, reactivate_order, send_download_reminders,
+     send_expiry_warnings,
+ )
+ from pretix.plugins.banktransfer.payment import BankTransfer
+@@ -4449,3 +4449,99 @@ def test_autocreate_medium(event):
+     op = order.positions.first()
+     m = op.linked_media.get()
+     assert m.type == "barcode"
++
++
++def _make_pending_order(event, expires, code='FOO', **kwargs):
++    return Order.objects.create(
++        code=code, event=event, email='dummy@dummy.test',
++        status=Order.STATUS_PENDING,
++        datetime=now() - timedelta(days=10), expires=expires,
++        total=Decimal('23.00'), locale='en',
++        sales_channel=event.organizer.sales_channels.get(identifier="web"),
++        **kwargs
++    )
++
++
++@pytest.mark.django_db
++def test_expire_orders_expires_overdue_pending_order(event):
++    o = _make_pending_order(event, now() - timedelta(days=1))
++    expire_orders(sender=None)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_EXPIRED
++    assert o.all_logentries().filter(action_type='pretix.event.order.expired').exists()
++
++
++@pytest.mark.django_db
++def test_expire_orders_keeps_order_with_future_deadline(event):
++    o = _make_pending_order(event, now() + timedelta(days=1))
++    expire_orders(sender=None)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_PENDING
++
++
++@pytest.mark.django_db
++def test_expire_orders_ignores_non_pending_orders(event):
++    paid = _make_pending_order(event, now() - timedelta(days=1))
++    paid.status = Order.STATUS_PAID
++    paid.save()
++    expired = _make_pending_order(event, now() - timedelta(days=2), code='BAR')
++    expired.status = Order.STATUS_EXPIRED
++    expired.save()
++    expire_orders(sender=None)
++    paid.refresh_from_db()
++    expired.refresh_from_db()
++    assert paid.status == Order.STATUS_PAID
++    assert expired.status == Order.STATUS_EXPIRED
++
++
++@pytest.mark.django_db
++def test_expire_orders_ignores_orders_requiring_approval(event):
++    o = _make_pending_order(event, now() - timedelta(days=1), require_approval=True)
++    expire_orders(sender=None)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_PENDING
++
++
++@pytest.mark.django_db
++def test_expire_orders_ignores_valid_if_pending_orders(event):
++    o = _make_pending_order(event, now() - timedelta(days=1), valid_if_pending=True)
++    expire_orders(sender=None)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_PENDING
++
++
++@pytest.mark.django_db
++def test_expire_orders_respects_disabled_automatic_expiry(event):
++    event.settings.payment_term_expire_automatically = False
++    o = _make_pending_order(event, now() - timedelta(days=1))
++    expire_orders(sender=None)
++    o.refresh_from_db()
++    assert o.status == Order.STATUS_PENDING
++
++
++@pytest.mark.django_db
++def test_expire_orders_respects_payment_term_expire_delay(event):
++    event.settings.payment_term_expire_delay_days = 5
++    recent = _make_pending_order(event, now() - timedelta(days=1))
++    overdue = _make_pending_order(event, now() - timedelta(days=6), code='BAR')
++    expire_orders(sender=None)
++    recent.refresh_from_db()
++    overdue.refresh_from_db()
++    assert recent.status == Order.STATUS_PENDING
++    assert overdue.status == Order.STATUS_EXPIRED
++
++
++@pytest.mark.django_db
++def test_expire_orders_only_affects_events_with_automatic_expiry(event):
++    other_event = Event.objects.create(
++        organizer=event.organizer, name='Other', slug='other',
++        date_from=now(), plugins='pretix.plugins.banktransfer',
++    )
++    other_event.settings.payment_term_expire_automatically = False
++    o1 = _make_pending_order(event, now() - timedelta(days=1))
++    o2 = _make_pending_order(other_event, now() - timedelta(days=1), code='BAR')
++    expire_orders(sender=None)
++    o1.refresh_from_db()
++    o2.refresh_from_db()
++    assert o1.status == Order.STATUS_EXPIRED
++    assert o2.status == Order.STATUS_PENDING

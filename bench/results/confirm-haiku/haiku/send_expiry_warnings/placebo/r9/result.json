@@ -1,0 +1,65 @@
+{
+  "run_id": "haiku/send_expiry_warnings/placebo/r9",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "send_expiry_warnings",
+  "condition": "placebo",
+  "rep": 9,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 198.9,
+  "cost_usd": 0.023200230000000002,
+  "num_turns": 23,
+  "duration_s": 196.5,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 1,
+    "Bash": 15,
+    "Read": 1,
+    "Edit": 3
+  },
+  "files_read": [
+    "src/pretix/base/services/orders.py"
+  ],
+  "skills_invoked": [
+    "careful-dev"
+  ],
+  "bash_commands": [
+    "git status --short | head -20 && git log --oneline -3",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/placebo/r9/repo/src && sed -n 2695,2730p pretix/base/settings.py && sed -n 60,95p pretix/plugins/banktransfer/tasks.py && sed -n 1,60p pretix/base/services/orders.py | grep -n \"import\" ",
+    "grep -rn \"expir\" pretix/base/models/orders.py | head -40; grep -rn \"download_reminder_sent\\|expiry_reminder\\|expire_warning\" pretix/base/models/*.py pretix/base/services/*.py | head -30; sed -n 1499,1520p pretix/base/services/orders.py",
+    "sed -n 286,300p pretix/base/models/orders.py; sed -n 1519,1575p pretix/base/services/orders.py; grep -rn \"expiry_reminder_sent\\|order_expire_warning\\|expire_warning\" pretix --include=*.py | grep -v migrations | grep -v \"settings.py\\|forms/event.py\\|mail_settings\" ; grep -rn \"expiry_reminder_sent\" pretix/base/migrations | head -3; grep -n \"expire_warning\\|expiry_reminder\" pretix/base/email.py pretix/base/services/mail.py 2>/dev/null | head",
+    "grep -rn \"expire_date\\|def get_email_context\" pretix/base/services/mail.py pretix/base/email.py 2>/dev/null | head; grep -rln \"send_download_reminders\\|download_reminder\" tests | head; grep -n \"def send_mail\" -A4 pretix/base/models/orders.py; grep -n \"expire_warning\\|expiry_reminder\" -r tests | grep -v mail_settings_preview | head",
+    "grep -n \"expire\" pretix/base/email.py | head; grep -n \"order_expire_warning\\|expire_warning\\|'expire_date'\\|expire_date\" pretix/base/services/*.py pretix/base/email.py pretix/base/models/orders.py | head -20; grep -n \"download_reminder\" tests/base/test_orders.py | head -5; grep -n \"^class \\|^def \\|^@pytest\" tests/base/test_orders.py | head -20",
+    "sed -n 40,100p tests/base/test_orders.py; sed -n 940,990p tests/base/test_orders.py; sed -n 312,345p tests/base/test_orders.py; sed -n 50,62p tests/base/test_orders.py",
+    "sed -n 20,39p tests/base/test_orders.py; sed -n 915,940p tests/base/test_orders.py; grep -n \"^from\\|^import\" pretix/base/services/orders.py | sed -n 1,200p | grep -i \"language\\|get_email_context\\|OF_SELF\\|scopes_disabled\\|Q,\\|Exists\\|Subquery\"; grep -n \"OF_SELF\\|^from pretix.base.i18n\\|get_email_context\" pretix/base/services/orders.py | head -5",
+    "tail -n 15 tests/base/test_orders.py; grep -n \"^class \" tests/base/test_orders.py | tail -3",
+    "cat >> tests/base/test_orders.py << 'EOF'\n\n\ndef _create_pending_order(event, code, expires, **kwargs):\n    return Order.objects.create(\n        code=code, event=event, email='dummy@dummy.test',\n        status=Order.STATUS_PENDING, locale='en',\n        datetime=now(), expires=expires,\n        total=Decimal('23.00'),\n        sales_channel=event.organizer.sales_channels.get(identifier=\"web\"),\n        **kwargs\n    )\n\n\n@pytest.mark.django_db\ndef test_expiry_warning_sent_within_window(event):\n    event.settings.mail_days_order_expire_warning = 3\n    o = _create_pending_order(event, 'EXP1', now() + timedelta(days=2))\n    send_expiry_warnings(sender=event)\n    assert len(djmail.outbox) == 1\n    assert djmail.outbox[0].to == ['dummy@dummy.test']\n    assert o.code in djmail.outbox[0].subject\n    o.refresh_from_db()\n    assert o.expiry_reminder_sent\n    assert o.all_logentries().filter(action_type='pretix.event.order.email.expire_warning_sent').exists()\n\n\n@pytest.mark.django_db\ndef test_expiry_warning_not_sent_outside_window(event):\n    event.settings.mail_days_order_expire_warning = 3\n    o = _create_pending_order(event, 'EXP1', now() + timedelta(days=5))\n    send_expiry_warnings(sender=event)\n    assert len(djmail.outbox) == 0\n    o.refresh_from_db()\n    assert not o.expiry_reminder_sent\n\n\n@pytest.mark.django_db\ndef test_expiry_warning_disabled_with_zero_days(event):\n    event.settings.mail_days_order_expire_warning = 0\n    o = _create_pending_order(event, 'EXP1', now() + timedelta(days=2))\n    send_expiry_warnings(sender=event)\n    assert len(djmail.outbox) == 0\n    o.refresh_from_db()\n    assert not o.expiry_reminder_sent\n\n\n@pytest.mark.django_db\ndef test_expiry_warning_sent_only_once(event):\n    event.settings.mail_days_order_expire_warning = 3\n    _create_pending_order(event, 'EXP1', now() + timedelta(days=2))\n    send_expiry_warnings(sender=event)\n    send_expiry_warnings(sender=event)\n    assert len(djmail.outbox) == 1\n\n\n@pytest.mark.django_db\ndef test_expiry_warning_skips_already_expired_order(event):\n    event.settings.mail_days_order_expire_warning = 3\n    _create_pending_order(event, 'EXP1', now() - timedelta(hours=1))\n    send_expiry_warnings(sender=event)\n    assert len(djmail.outbox) == 0\n\n\n@pytest.mark.django_db\ndef test_expiry_warning_skips_paid_order(event):\n    event.settings.mail_days_order_expire_warning = 3\n    _create_pending_order(event, 'EXP1', now() + timedelta(days=2), status=Order.STATUS_PAID)\n    send_expiry_warnings(sender=event)\n    assert len(djmail.outbox) == 0\n\n\n@pytest.mark.django_db\ndef test_expiry_warning_skips_valid_if_pending_order(event):\n    event.settings.mail_days_order_expire_warning = 3\n    _create_pending_order(event, 'EXP1', now() + timedelta(days=2), valid_if_pending=True)\n    send_expiry_warnings(sender=event)\n    assert len(djmail.outbox) == 0\n\n\n@pytest.mark.django_db\ndef test_expiry_warning_skips_order_requiring_approval(event):\n    event.settings.mail_days_order_expire_warning = 3\n    _create_pending_order(event, 'EXP1', now() + timedelta(days=2), require_approval=True)\n    send_expiry_warnings(sender=event)\n    assert len(djmail.outbox) == 0\n\n\n@pytest.mark.django_db\ndef test_expiry_warning_skips_order_with_cancellation_fee(event):\n    event.settings.mail_days_order_expire_warning = 3\n    o = _create_pending_order(event, 'EXP1', now() + timedelta(days=2))\n    OrderFee.objects.create(order=o, fee_type=OrderFee.FEE_TYPE_CANCELLATION, value=Decimal('5.00'))\n    send_expiry_warnings(sender=event)\n    assert len(djmail.outbox) == 0\nEOF\ntimeout 900 python -m pytest tests/base/test_orders.py -k \"expiry_warning\" -q -p no:cacheprovider 2>&1 | tail -40",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k \"expiry_warning\" -q -p no:cacheprovider 2>&1 | tail -15; python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -5; python -m isort -c pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -3",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k \"expiry_warning\" -q -p no:cacheprovider",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py",
+    "timeout 900 python -m pytest tests/base/test_runperiodic.py tests/base/test_orders.py -k \"runperiodic or download or expir\" -q -p no:cacheprovider",
+    "timeout 590 python -m pytest tests/base/test_orders.py -q -p no:cacheprovider -x 2>&1 | tail -8"
+  ],
+  "seam_table": false,
+  "output_chars": 5369,
+  "hidden": {
+    "base.test_orders.PaymentReminderTests::test_disabled": true,
+    "base.test_orders.PaymentReminderTests::test_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail": false,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_confirmed_but_not_all_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_failed_state": true,
+    "base.test_orders.PaymentReminderTests::test_sent_days": true,
+    "base.test_orders.PaymentReminderTests::test_sent_no_expiry": false,
+    "base.test_orders.PaymentReminderTests::test_sent_not_immediately_after_purchase": false,
+    "base.test_orders.PaymentReminderTests::test_sent_once": true
+  },
+  "hidden_passed": 6,
+  "hidden_total": 9,
+  "visible_green": true,
+  "visible_passed": 430,
+  "visible_total": 430,
+  "diff_lines": 136
+}

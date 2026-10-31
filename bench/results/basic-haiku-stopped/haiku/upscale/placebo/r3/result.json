@@ -1,0 +1,63 @@
+{
+  "run_id": "haiku/upscale/placebo/r3",
+  "model": "haiku",
+  "task": "upscale",
+  "condition": "placebo",
+  "rep": 3,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 86.8,
+  "cost_usd": 0.02090905,
+  "num_turns": 21,
+  "duration_s": 85.0,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 9,
+    "Write": 3,
+    "Edit": 6
+  },
+  "files_read": [],
+  "skills_invoked": [
+    "careful-dev"
+  ],
+  "bash_commands": [
+    "git status --short && git log --oneline | head -5 && find . -path ./.git -prune -o -type f -print | grep -v __pycache__ | head -100 && cat README.md 2>/dev/null | head -80",
+    "cat pixforge/features/generate.py; echo ----; ls pixforge pixforge/features; echo ----; cat pixforge/features/__init__.py 2>/dev/null",
+    "cat pixforge/features/common.py; echo ----VIDEO; cat pixforge/features/video.py; echo ----JOBS; cat pixforge/jobs.py; echo ----PRICING; cat pixforge/pricing.py; echo ----IMAGES; cat pixforge/images.py",
+    "cat pixforge/migrations/*.sql; echo ----DB; cat pixforge/db.py; echo ----BILLING; cat pixforge/billing.py; echo ----LUMEN; cat lumen_sdk/client.py lumen_sdk/types.py lumen_sdk/errors.py lumen_sdk/__init__.py",
+    "cat docs/lumen_api.md; echo ----FAKES; cat tests/fakes.py; echo ----CONFTEST; cat tests/conftest.py; echo ----TESTGEN; cat tests/test_generate.py",
+    "cat pixforge/i18n.py; echo ----EN; cat pixforge/locales/en.json; echo ----RU; cat pixforge/locales/ru.json; echo ----I18NTEST; cat tests/test_i18n.py; echo ----SWEEP; cat pixforge/sweeper.py; echo ----USERS; cat pixforge/users.py | head -40; echo ----PYPROJ; cat pyproject.toml",
+    "python3 -m pytest -q 2>&1 | tail -15",
+    "python3 -m pytest -q 2>&1 | tail -30",
+    "git status --short && git diff --stat && python3 -m pytest -q 2>&1 | tail -2"
+  ],
+  "seam_table": false,
+  "output_chars": 4366,
+  "hidden": {
+    "test_happy_path_charges_4_and_saves_2x_image": true,
+    "test_job_records_source_image_id": true,
+    "test_migration_applies_to_already_migrated_database": true,
+    "test_pro_user_pays_discounted_price": true,
+    "test_retry_with_same_request_id_charges_once": true,
+    "test_retry_does_not_upscale_again": true,
+    "test_rejected_input_is_not_reported_as_success": true,
+    "test_rejected_input_costs_nothing": true,
+    "test_filtered_result_is_refunded": true,
+    "test_provider_error_is_refunded": true,
+    "test_rate_limit_is_refunded": true,
+    "test_cannot_upscale_another_users_image": true,
+    "test_missing_image_is_refused_without_charge": true,
+    "test_insufficient_credits_does_not_call_provider": true,
+    "test_error_messages_are_localized": true,
+    "test_locale_files_in_sync": true,
+    "test_no_direct_balance_writes": true
+  },
+  "hidden_passed": 17,
+  "hidden_total": 17,
+  "visible_green": true,
+  "visible_passed": 30,
+  "visible_total": 30,
+  "diff_lines": 257
+}

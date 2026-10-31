@@ -1,0 +1,5 @@
+This is pretix, an event ticketing system (Django). Automatic waiting-list processing is broken: the Celery task `assign_automatically` is missing from `src/pretix/base/services/waitinglist.py`, but the control panel (`src/pretix/control/views/waitinglist.py`) and `process_waitinglist` in the same module still use it.
+
+Implement `assign_automatically(event, user_id=None, subevent_id=None)` in `src/pretix/base/services/waitinglist.py` as a Celery task, like the other tasks in that module. It gives the people on an event's waiting list their tickets as places become available.
+
+Add tests for it. The development environment is installed: run tests from `src/` with `python -m pytest <test files>` (the full suite is very slow, so run the relevant test files).

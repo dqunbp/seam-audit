@@ -1,0 +1,59 @@
+{
+  "run_id": "haiku/send_expiry_warnings/skill/r1",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "send_expiry_warnings",
+  "condition": "skill",
+  "rep": 1,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 115.4,
+  "cost_usd": 0.022215750000000003,
+  "num_turns": 27,
+  "duration_s": 111.6,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 4,
+    "Bash": 5,
+    "Read": 11,
+    "Edit": 4
+  },
+  "files_read": [
+    "src/pretix/base/models/orders.py",
+    "src/pretix/base/services/orders.py",
+    "src/pretix/base/settings.py",
+    "src/pretix/plugins/banktransfer/tasks.py",
+    "src/tests/base/test_orders.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "ls CLAUDE.md AGENTS.md 2>/dev/null; cat CLAUDE.md 2>/dev/null | head -80",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/send_expiry_warnings/skill/r1/repo/src && timeout 580 python -m pytest tests/base/test_orders.py -k \"ExpiryWarning or DownloadReminder or expire\" -q -p no:cacheprovider 2>&1 | tail -40",
+    "(python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -5; echo \"flake8 exit: $?\"; python -m isort -c pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -5; echo \"isort done\") ; python -m pytest tests/base/test_orders.py -k ExpiryWarning -q -p no:cacheprovider --co 2>&1 | tail -2",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit: $?\"; python -m isort -c pretix/base/services/orders.py tests/base/test_orders.py; echo \"isort exit: $?\"",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/send_expiry_warnings/skill/r1/repo && git status --short && git diff --stat"
+  ],
+  "seam_table": true,
+  "output_chars": 6598,
+  "hidden": {
+    "base.test_orders.PaymentReminderTests::test_disabled": true,
+    "base.test_orders.PaymentReminderTests::test_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail": false,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_confirmed_but_not_all_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_failed_state": true,
+    "base.test_orders.PaymentReminderTests::test_sent_days": true,
+    "base.test_orders.PaymentReminderTests::test_sent_no_expiry": false,
+    "base.test_orders.PaymentReminderTests::test_sent_not_immediately_after_purchase": false,
+    "base.test_orders.PaymentReminderTests::test_sent_once": true
+  },
+  "hidden_passed": 6,
+  "hidden_total": 9,
+  "visible_green": true,
+  "visible_passed": 431,
+  "visible_total": 431,
+  "diff_lines": 152
+}

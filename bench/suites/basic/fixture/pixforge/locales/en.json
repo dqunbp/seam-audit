@@ -1,0 +1,9 @@
+{
+  "errors.insufficient_credits": "Not enough credits: this costs {cost}.",
+  "errors.provider_failed": "Generation failed. Your credits have been refunded.",
+  "errors.rate_limited": "The service is busy right now. Please try again in a minute. Your credits have been refunded.",
+  "errors.content_filtered": "The result was blocked by the content filter. Your credits have been refunded.",
+  "errors.timed_out": "Generation took too long and was cancelled. Your credits have been refunded.",
+  "errors.daily_video_limit": "You have reached today's free plan limit of {limit} videos.",
+  "errors.not_found": "Not found."
+}

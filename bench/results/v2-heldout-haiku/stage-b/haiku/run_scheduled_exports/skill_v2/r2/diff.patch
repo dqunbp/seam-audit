@@ -1,0 +1,139 @@
+diff --git a/src/pretix/base/services/export.py b/src/pretix/base/services/export.py
+index 493bf71..07c078d 100644
+--- a/src/pretix/base/services/export.py
++++ b/src/pretix/base/services/export.py
+@@ -494,3 +494,30 @@ def scheduled_event_export(self, event: Event, schedule: int) -> None:
+     )
+ 
+ 
++def _queue_due_schedule(schedule, task, context_kwarg, context_id):
++    # Advance the schedule before dispatching, so that the next periodic run does not queue it a second time.
++    # The export is only dispatched once the transaction has been committed, so a rollback doesn't leave an
++    # export queued for a schedule whose next run was never persisted.
++    schedule.compute_next_run()
++    schedule.save(update_fields=['schedule_next_run'])
++    transaction.on_commit(
++        lambda: task.apply_async(kwargs={context_kwarg: context_id, 'schedule': schedule.pk})
++    )
++
++
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def run_scheduled_exports(sender, **kwargs):
++    with transaction.atomic():
++        # skip_locked: if another worker is already processing a due schedule, leave it to that worker.
++        for s in ScheduledEventExport.objects.select_for_update(skip_locked=True, of=OF_SELF).select_related(
++            'event'
++        ).filter(schedule_next_run__lte=now()):
++            _queue_due_schedule(s, scheduled_event_export, 'event', s.event_id)
++
++        for s in ScheduledOrganizerExport.objects.select_for_update(skip_locked=True, of=OF_SELF).filter(
++            schedule_next_run__lte=now()
++        ):
++            _queue_due_schedule(s, scheduled_organizer_export, 'organizer', s.organizer_id)
++
++
+diff --git a/src/tests/base/test_export.py b/src/tests/base/test_export.py
+index 8ed4054..fcb341c 100644
+--- a/src/tests/base/test_export.py
++++ b/src/tests/base/test_export.py
+@@ -20,6 +20,8 @@
+ # <https://www.gnu.org/licenses/>.
+ #
+ from datetime import datetime, time, timedelta, timezone
++from unittest import mock
++from zoneinfo import ZoneInfo
+ 
+ import pytest
+ from django.core import mail as djmail
+@@ -30,6 +32,9 @@ from freezegun import freeze_time
+ from pretix.base.models import (
+     Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,
+ )
++from pretix.base.services.export import (
++    run_scheduled_exports, scheduled_event_export, scheduled_organizer_export,
++)
+ 
+ 
+ @pytest.fixture(scope='function')
+@@ -57,3 +62,80 @@ def user(team):
+     return user
+ 
+ 
++@pytest.mark.django_db
++@freeze_time("2023-01-19 07:00:00")
++def test_run_scheduled_event_export_dispatches_due_and_advances(event, user, django_capture_on_commit_callbacks):
++    tz = ZoneInfo("Europe/Berlin")
++    due = ScheduledEventExport.objects.create(
++        event=event, owner=user, locale="en", export_identifier="orders", export_form_data={},
++        mail_subject="Export", mail_template="Here it is",
++        schedule_rrule="DTSTART:20230101T000000\nRRULE:FREQ=DAILY",
++        schedule_rrule_time=time(6, 30),
++        schedule_next_run=datetime(2023, 1, 19, 6, 30, tzinfo=tz),
++    )
++    not_due = ScheduledEventExport.objects.create(
++        event=event, owner=user, locale="en", export_identifier="orders", export_form_data={},
++        mail_subject="Export", mail_template="Here it is",
++        schedule_rrule="DTSTART:20230101T000000\nRRULE:FREQ=DAILY",
++        schedule_rrule_time=time(9, 0),
++        schedule_next_run=datetime(2023, 1, 19, 9, 0, tzinfo=tz),
++    )
++    with mock.patch.object(scheduled_event_export, "apply_async") as apply_async, \
++            django_capture_on_commit_callbacks(execute=True):
++        run_scheduled_exports(sender=None)
++
++    apply_async.assert_called_once_with(kwargs={"event": event.pk, "schedule": due.pk})
++    due.refresh_from_db()
++    assert due.schedule_next_run == datetime(2023, 1, 20, 6, 30, tzinfo=tz)
++    not_due.refresh_from_db()
++    assert not_due.schedule_next_run == datetime(2023, 1, 19, 9, 0, tzinfo=tz)
++
++
++@pytest.mark.django_db
++@freeze_time("2023-01-19 07:00:00")
++def test_run_scheduled_event_export_not_dispatched_twice(event, user, django_capture_on_commit_callbacks):
++    tz = ZoneInfo("Europe/Berlin")
++    ScheduledEventExport.objects.create(
++        event=event, owner=user, locale="en", export_identifier="orders", export_form_data={},
++        mail_subject="Export", mail_template="Here it is",
++        schedule_rrule="DTSTART:20230101T000000\nRRULE:FREQ=DAILY",
++        schedule_rrule_time=time(6, 30),
++        schedule_next_run=datetime(2023, 1, 19, 6, 30, tzinfo=tz),
++    )
++    with mock.patch.object(scheduled_event_export, "apply_async") as apply_async, \
++            django_capture_on_commit_callbacks(execute=True):
++        run_scheduled_exports(sender=None)
++        run_scheduled_exports(sender=None)
++    assert apply_async.call_count == 1
++
++
++@pytest.mark.django_db
++@freeze_time("2023-01-19 07:00:00")
++def test_run_scheduled_organizer_export_dispatches_due_and_advances(event, user, django_capture_on_commit_callbacks):
++    tz = ZoneInfo("Europe/Berlin")
++    organizer = event.organizer
++    due = ScheduledOrganizerExport.objects.create(
++        organizer=organizer, owner=user, locale="en", export_identifier="orders", export_form_data={},
++        mail_subject="Export", mail_template="Here it is", timezone="Europe/Berlin",
++        schedule_rrule="DTSTART:20230101T000000\nRRULE:FREQ=DAILY",
++        schedule_rrule_time=time(6, 30),
++        schedule_next_run=datetime(2023, 1, 19, 6, 30, tzinfo=tz),
++    )
++    not_due = ScheduledOrganizerExport.objects.create(
++        organizer=organizer, owner=user, locale="en", export_identifier="orders", export_form_data={},
++        mail_subject="Export", mail_template="Here it is", timezone="Europe/Berlin",
++        schedule_rrule="DTSTART:20230101T000000\nRRULE:FREQ=DAILY",
++        schedule_rrule_time=time(9, 0),
++        schedule_next_run=datetime(2023, 1, 19, 9, 0, tzinfo=tz),
++    )
++    with mock.patch.object(scheduled_organizer_export, "apply_async") as apply_async, \
++            django_capture_on_commit_callbacks(execute=True):
++        run_scheduled_exports(sender=None)
++
++    apply_async.assert_called_once_with(kwargs={"organizer": organizer.pk, "schedule": due.pk})
++    due.refresh_from_db()
++    assert due.schedule_next_run == datetime(2023, 1, 20, 6, 30, tzinfo=tz)
++    not_due.refresh_from_db()
++    assert not_due.schedule_next_run == datetime(2023, 1, 19, 9, 0, tzinfo=tz)
++
++

@@ -1,0 +1,61 @@
+{
+  "run_id": "haiku/send_expiry_warnings/baseline/r6",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "send_expiry_warnings",
+  "condition": "baseline",
+  "rep": 6,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 116.0,
+  "cost_usd": 0.025637330000000003,
+  "num_turns": 28,
+  "duration_s": 113.8,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Bash": 9,
+    "Grep": 5,
+    "Read": 10,
+    "Edit": 3
+  },
+  "files_read": [
+    "src/pretix/base/models/orders.py",
+    "src/pretix/base/services/mail.py",
+    "src/pretix/base/services/orders.py",
+    "src/pretix/base/settings.py",
+    "src/pretix/plugins/banktransfer/tasks.py",
+    "src/tests/base/test_orders.py"
+  ],
+  "skills_invoked": [],
+  "bash_commands": [
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/baseline/r6/repo 2>/dev/null || cd /tmp/claude-0/-tmp-claude-0--home-user-seam-audit-4d868dbd-76d3-5c3d-a30c-fa647d6d00e0-scratchpad-runs-confirm-haiku-send-expiry-warnings-baseline-r6-repo/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad; pwd; git status --short | head; cd src 2>/dev/null; grep -rn \"periodic\" --include=*.py pretix | head -40; grep -rn \"expiry_warning\\|send_expiry\" --include=*.py . | head -30",
+    "pwd; ls",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/baseline/r6/repo/src && git status --short | head; grep -rn \"periodic\" --include=*.py pretix | head -40; echo ---; grep -rn \"expiry_warning\\|send_expiry\\|mail_days_order_expire\" --include=*.py . | head -30",
+    "tail -n 15 /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/baseline/r6/repo/src/tests/base/test_orders.py; wc -l /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/baseline/r6/repo/src/tests/base/test_orders.py",
+    "cat >> /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/baseline/r6/repo/src/tests/base/test_orders.py <<'EOF'\n\n\nclass ExpiryWarningTests(TestCase):\n    def setUp(self):\n        super().setUp()\n        self.o = Organizer.objects.create(name='Dummy', slug='dummy')\n        with scope(organizer=self.o):\n            self.event = Event.objects.create(\n                organizer=self.o, name='Dummy', slug='dummy',\n                date_from=now() + timedelta(days=30),\n                plugins='pretix.plugins.banktransfer,tests.testdummy'\n            )\n            self.order = Order.objects.create(\n                code='FOO', event=self.event, email='dummy@dummy.test',\n                status=Order.STATUS_PENDING, locale='en',\n                datetime=now() - timedelta(days=4),\n                expires=now() + timedelta(days=2),\n                total=Decimal('46.00'),\n                sales_channel=self.event.organizer.sales_channels.get(identifier=\"web\"),\n            )\n            djmail.outbox = []\n\n    @classscope(attr='o')\n    def test_sent_within_default_window(self):\n        send_expiry_warnings(sender=self.event)\n        assert len(djmail.outbox) == 1\n        assert djmail.outbox[0].to == ['dummy@dummy.test']\n        self.order.refresh_from_db()\n        assert self.order.expiry_reminder_sent\n\n    @classscope(attr='o')\n    def test_disabled_with_zero_days(self):\n        self.event.settings.mail_days_order_expire_warning = 0\n        send_expiry_warnings(sender=self.event)\n        assert len(djmail.outbox) == 0\n        self.order.refresh_from_db()\n        assert not self.order.expiry_reminder_sent\n\n    @classscope(attr='o')\n    def test_not_sent_before_window(self):\n        self.event.settings.mail_days_order_expire_warning = 1\n        send_expiry_warnings(sender=self.event)\n        assert len(djmail.outbox) == 0\n\n    @classscope(attr='o')\n    def test_sent_once(self):\n        self.event.settings.mail_days_order_expire_warning = 3\n        send_expiry_warnings(sender=self.event)\n        assert len(djmail.outbox) == 1\n        send_expiry_warnings(sender=self.event)\n        assert len(djmail.outbox) == 1\n\n    @classscope(attr='o')\n    def test_not_sent_for_paid_order(self):\n        self.order.status = Order.STATUS_PAID\n        self.order.save()\n        send_expiry_warnings(sender=self.event)\n        assert len(djmail.outbox) == 0\n\n    @classscope(attr='o')\n    def test_not_sent_for_already_expired_order(self):\n        self.order.expires = now() - timedelta(hours=1)\n        self.order.save()\n        send_expiry_warnings(sender=self.event)\n        assert len(djmail.outbox) == 0\n\n    @classscope(attr='o')\n    def test_not_sent_for_valid_if_pending_order(self):\n        self.order.valid_if_pending = True\n        self.order.save()\n        send_expiry_warnings(sender=self.event)\n        assert len(djmail.outbox) == 0\n\n    @classscope(attr='o')\n    def test_not_sent_for_order_requiring_approval(self):\n        self.order.require_approval = True\n        self.order.save()\n        send_expiry_warnings(sender=self.event)\n        assert len(djmail.outbox) == 0\n\n    @classscope(attr='o')\n    def test_not_sent_for_order_with_cancellation_fee(self):\n        OrderFee.objects.create(\n            order=self.order, fee_type=OrderFee.FEE_TYPE_CANCELLATION, value=Decimal('5.00'),\n        )\n        send_expiry_warnings(sender=self.event)\n        assert len(djmail.outbox) == 0\nEOF\necho done",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/baseline/r6/repo/src && timeout 900 python -m pytest tests/base/test_orders.py -k \"ExpiryWarning or DownloadReminder\" -q -p no:cacheprovider 2>&1 | tail -n 40",
+    "(python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit $?\"; python -m isort --check-only --diff pretix/base/services/orders.py tests/base/test_orders.py; echo \"isort exit $?\") 2>&1 | tail -n 30",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit $?\"; python -m isort --check-only pretix/base/services/orders.py tests/base/test_orders.py; echo \"isort exit $?\"",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py"
+  ],
+  "seam_table": false,
+  "output_chars": 4190,
+  "hidden": {
+    "base.test_orders.PaymentReminderTests::test_disabled": true,
+    "base.test_orders.PaymentReminderTests::test_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail": false,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_confirmed_but_not_all_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_failed_state": true,
+    "base.test_orders.PaymentReminderTests::test_sent_days": true,
+    "base.test_orders.PaymentReminderTests::test_sent_no_expiry": false,
+    "base.test_orders.PaymentReminderTests::test_sent_not_immediately_after_purchase": false,
+    "base.test_orders.PaymentReminderTests::test_sent_once": true
+  },
+  "hidden_passed": 6,
+  "hidden_total": 9,
+  "visible_green": true,
+  "visible_passed": 430,
+  "visible_total": 430,
+  "diff_lines": 139
+}

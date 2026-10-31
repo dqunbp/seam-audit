@@ -1,0 +1,7 @@
+This is pretix, an event ticketing system (Django). Canceling orders is broken: the function `_cancel_order` is missing from `src/pretix/base/services/orders.py`, but the Celery task `cancel_order` in the same module (used by the control panel, the REST API and customer self-service cancellation), `mark_order_refunded` and the event cancellation service still call it.
+
+Implement `_cancel_order(order, user=None, send_mail=True, api_token=None, device=None, oauth_application=None, cancellation_fee=None, keep_fees=None, cancel_invoice=True, comment=None, tax_mode=None)` in `src/pretix/base/services/orders.py`. It cancels an order — completely, or, if a `cancellation_fee` is given, everything except that fee, which the customer still has to pay (or which is kept from what they paid). The other parameters mean what their callers use them for. It returns the order's primary key.
+
+Add tests for it. The development environment is installed: run tests from `src/` with `python -m pytest <test files>` (the full suite is very slow, so run the relevant test files).
+
+Before you start, use the `seam-audit` skill.

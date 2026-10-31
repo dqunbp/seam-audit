@@ -1,0 +1,160 @@
+diff --git a/src/pretix/base/services/export.py b/src/pretix/base/services/export.py
+index 493bf71..214e036 100644
+--- a/src/pretix/base/services/export.py
++++ b/src/pretix/base/services/export.py
+@@ -494,3 +494,30 @@ def scheduled_event_export(self, event: Event, schedule: int) -> None:
+     )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def run_scheduled_exports(sender, **kwargs):
++    """
++    Dispatch all scheduled exports (event-level and organizer-level) whose next run is due. The next run is
++    advanced while the rows are locked, so overlapping runs of this periodic job never dispatch the same
++    schedule twice. Dispatching happens after the transaction commits, so the workers see the advanced schedule.
++    """
++    dispatch = []
++    with transaction.atomic():
++        for model, task, key in (
++            (ScheduledEventExport, scheduled_event_export, 'event'),
++            (ScheduledOrganizerExport, scheduled_organizer_export, 'organizer'),
++        ):
++            qs = model.objects.filter(
++                schedule_next_run__isnull=False,
++                schedule_next_run__lte=now(),
++            ).select_for_update(of=OF_SELF, skip_locked=connection.features.has_select_for_update_skip_locked)
++            for s in qs:
++                s.compute_next_run()
++                s.save(update_fields=['schedule_next_run'])
++                dispatch.append((task, {key: getattr(s, f'{key}_id'), 'schedule': s.pk}))
++
++    for task, task_kwargs in dispatch:
++        task.apply_async(kwargs=task_kwargs)
++
++
+diff --git a/src/tests/base/test_export.py b/src/tests/base/test_export.py
+index 8ed4054..d4f5495 100644
+--- a/src/tests/base/test_export.py
++++ b/src/tests/base/test_export.py
+@@ -20,6 +20,7 @@
+ # <https://www.gnu.org/licenses/>.
+ #
+ from datetime import datetime, time, timedelta, timezone
++from unittest import mock
+ 
+ import pytest
+ from django.core import mail as djmail
+@@ -30,6 +31,9 @@ from freezegun import freeze_time
+ from pretix.base.models import (
+     Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,
+ )
++from pretix.base.services.export import (
++    run_scheduled_exports, scheduled_event_export, scheduled_organizer_export,
++)
+ 
+ 
+ @pytest.fixture(scope='function')
+@@ -57,3 +61,102 @@ def user(team):
+     return user
+ 
+ 
++RRULE_DAILY = 'DTSTART:20230118T000000\nRRULE:FREQ=DAILY;INTERVAL=1;WKST=MO'
++
++
++@pytest.fixture
++def event_schedule(event, user):
++    return ScheduledEventExport.objects.create(
++        event=event, owner=user, export_identifier='itemdata', export_form_data={'_format': 'xlsx'},
++        locale='en', mail_subject='Event export', mail_template='Body',
++        schedule_rrule=RRULE_DAILY, schedule_rrule_time=time(2, 30),
++        schedule_next_run=now() - timedelta(minutes=5),
++    )
++
++
++@pytest.fixture
++def organizer_schedule(event, user):
++    return ScheduledOrganizerExport.objects.create(
++        organizer=event.organizer, owner=user, export_identifier='itemdata', export_form_data={'_format': 'xlsx'},
++        locale='en', mail_subject='Organizer export', mail_template='Body',
++        schedule_rrule=RRULE_DAILY, schedule_rrule_time=time(2, 30), timezone='Europe/Berlin',
++        schedule_next_run=now() - timedelta(minutes=5),
++    )
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_dispatches_due_schedules(event, event_schedule, organizer_schedule):
++    with mock.patch.object(scheduled_event_export, 'apply_async') as event_dispatch, \
++            mock.patch.object(scheduled_organizer_export, 'apply_async') as organizer_dispatch:
++        run_scheduled_exports(sender=None)
++
++    event_dispatch.assert_called_once_with(kwargs={'event': event.pk, 'schedule': event_schedule.pk})
++    organizer_dispatch.assert_called_once_with(kwargs={'organizer': event.organizer.pk, 'schedule': organizer_schedule.pk})
++
++    event_schedule.refresh_from_db()
++    organizer_schedule.refresh_from_db()
++    assert event_schedule.schedule_next_run > now()
++    assert organizer_schedule.schedule_next_run > now()
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_skips_schedules_not_due(event, event_schedule, organizer_schedule):
++    later = now() + timedelta(hours=1)
++    event_schedule.schedule_next_run = later
++    event_schedule.save()
++    organizer_schedule.schedule_next_run = None
++    organizer_schedule.save()
++
++    with mock.patch.object(scheduled_event_export, 'apply_async') as event_dispatch, \
++            mock.patch.object(scheduled_organizer_export, 'apply_async') as organizer_dispatch:
++        run_scheduled_exports(sender=None)
++
++    event_dispatch.assert_not_called()
++    organizer_dispatch.assert_not_called()
++    event_schedule.refresh_from_db()
++    assert event_schedule.schedule_next_run == later
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_does_not_dispatch_twice(event, event_schedule, organizer_schedule):
++    with mock.patch.object(scheduled_event_export, 'apply_async') as event_dispatch, \
++            mock.patch.object(scheduled_organizer_export, 'apply_async') as organizer_dispatch:
++        run_scheduled_exports(sender=None)
++        run_scheduled_exports(sender=None)
++
++    assert event_dispatch.call_count == 1
++    assert organizer_dispatch.call_count == 1
++
++
++@pytest.mark.django_db
++def test_run_scheduled_exports_final_run_of_ended_rrule(event, event_schedule):
++    event_schedule.schedule_rrule = 'DTSTART:20230118T000000\nRRULE:FREQ=DAILY;UNTIL=20230119T000000'
++    event_schedule.save()
++
++    with mock.patch.object(scheduled_event_export, 'apply_async') as event_dispatch:
++        run_scheduled_exports(sender=None)
++        run_scheduled_exports(sender=None)
++
++    event_dispatch.assert_called_once_with(kwargs={'event': event.pk, 'schedule': event_schedule.pk})
++    event_schedule.refresh_from_db()
++    assert event_schedule.schedule_next_run is None
++
++
++@pytest.mark.django_db(transaction=True)
++def test_run_scheduled_exports_runs_dispatched_tasks(event, event_schedule, organizer_schedule, user):
++    # The owner is inactive, so the export itself is refused without rendering anything and the failure is logged
++    # and reported to the owner by the existing task. This verifies the dispatched kwargs resolve in the real tasks.
++    user.is_active = False
++    user.save()
++
++    run_scheduled_exports(sender=None)
++
++    event_schedule.refresh_from_db()
++    organizer_schedule.refresh_from_db()
++    assert event_schedule.error_counter == 1
++    assert event_schedule.error_last_message == 'Permission denied.'
++    assert organizer_schedule.error_counter == 1
++    assert organizer_schedule.error_last_message == 'Permission denied.'
++    assert len(djmail.outbox) == 0
++
++

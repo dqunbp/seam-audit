@@ -1,0 +1,193 @@
+diff --git a/src/pretix/base/services/export.py b/src/pretix/base/services/export.py
+index 493bf71..2645051 100644
+--- a/src/pretix/base/services/export.py
++++ b/src/pretix/base/services/export.py
+@@ -494,3 +494,46 @@ def scheduled_event_export(self, event: Event, schedule: int) -> None:
+     )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def run_scheduled_exports(sender, **kwargs):
++    """
++    Dispatches all scheduled exports (event-level and organizer-level) whose next run is due. The next run is
++    advanced before dispatching, within a row lock, so that overlapping periodic runs never dispatch the same
++    occurrence twice. The export itself runs asynchronously in the per-schedule tasks.
++    """
++    dispatch = []
++    with transaction.atomic():
++        for model, task in (
++            (ScheduledEventExport, scheduled_event_export),
++            (ScheduledOrganizerExport, scheduled_organizer_export),
++        ):
++            qs = model.objects.filter(
++                schedule_next_run__lte=now(),
++            ).select_for_update(
++                of=OF_SELF, skip_locked=connection.features.has_select_for_update_skip_locked
++            )
++            for schedule in qs:
++                try:
++                    schedule.compute_next_run()
++                    schedule.save(update_fields=['schedule_next_run'])
++                except Exception:
++                    # Leave the schedule due, so it is retried on the next periodic run. Other schedules must not
++                    # be blocked by this one.
++                    logger.exception(f"Could not advance scheduled export {schedule.pk}.")
++                    continue
++                dispatch.append((task, schedule))
++
++    # Dispatch only after the transaction has committed, so that the advanced next run is visible to the worker.
++    for task, schedule in dispatch:
++        if isinstance(schedule, ScheduledEventExport):
++            kwargs = {'event': schedule.event_id, 'schedule': schedule.pk}
++        else:
++            kwargs = {'organizer': schedule.organizer_id, 'schedule': schedule.pk}
++        try:
++            task.apply_async(kwargs=kwargs)
++        except Exception:
++            # The occurrence is considered consumed at this point. Log loudly, so it can be noticed and re-run.
++            logger.exception(f"Could not dispatch scheduled export {schedule.pk}.")
++
++
+diff --git a/src/tests/base/test_export.py b/src/tests/base/test_export.py
+index 8ed4054..93a60e3 100644
+--- a/src/tests/base/test_export.py
++++ b/src/tests/base/test_export.py
+@@ -20,6 +20,7 @@
+ # <https://www.gnu.org/licenses/>.
+ #
+ from datetime import datetime, time, timedelta, timezone
++from unittest import mock
+ 
+ import pytest
+ from django.core import mail as djmail
+@@ -30,6 +31,10 @@ from freezegun import freeze_time
+ from pretix.base.models import (
+     Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,
+ )
++from pretix.base.services.export import (
++    run_scheduled_exports, scheduled_event_export as scheduled_event_export_task,
++    scheduled_organizer_export as scheduled_organizer_export_task,
++)
+ 
+ 
+ @pytest.fixture(scope='function')
+@@ -57,3 +62,118 @@ def user(team):
+     return user
+ 
+ 
++def _schedule_kwargs(user, **overrides):
++    kwargs = dict(
++        owner=user,
++        export_identifier='orderlist',
++        export_form_data={},
++        locale='en',
++        mail_subject='Export',
++        mail_template='Hello',
++        schedule_rrule='DTSTART:20230101T000000\nRRULE:FREQ=DAILY',
++        schedule_rrule_time=time(6, 0),
++        schedule_next_run=datetime(2023, 3, 1, 9, 0, tzinfo=timezone.utc),
++    )
++    kwargs.update(overrides)
++    return kwargs
++
++
++@pytest.fixture
++def scheduled_event_export(event, user):
++    return ScheduledEventExport.objects.create(event=event, **_schedule_kwargs(user))
++
++
++@pytest.fixture
++def scheduled_organizer_export(event, user):
++    return ScheduledOrganizerExport.objects.create(
++        organizer=event.organizer, timezone='Europe/Berlin', **_schedule_kwargs(user)
++    )
++
++
++@pytest.mark.django_db
++@freeze_time("2023-03-01 10:00:00")
++def test_scheduled_event_export_dispatched_when_due(scheduled_event_export):
++    with mock.patch.object(scheduled_event_export_task, 'apply_async') as apply_async:
++        run_scheduled_exports(sender=None)
++    apply_async.assert_called_once_with(kwargs={
++        'event': scheduled_event_export.event_id,
++        'schedule': scheduled_event_export.pk,
++    })
++    scheduled_event_export.refresh_from_db()
++    assert scheduled_event_export.schedule_next_run > now()
++
++
++@pytest.mark.django_db
++@freeze_time("2023-03-01 10:00:00")
++def test_scheduled_organizer_export_dispatched_when_due(scheduled_organizer_export):
++    with mock.patch.object(scheduled_organizer_export_task, 'apply_async') as apply_async:
++        run_scheduled_exports(sender=None)
++    apply_async.assert_called_once_with(kwargs={
++        'organizer': scheduled_organizer_export.organizer_id,
++        'schedule': scheduled_organizer_export.pk,
++    })
++    scheduled_organizer_export.refresh_from_db()
++    assert scheduled_organizer_export.schedule_next_run > now()
++
++
++@pytest.mark.django_db
++@freeze_time("2023-03-01 10:00:00")
++def test_scheduled_export_not_dispatched_when_not_due_or_exhausted(event, user):
++    not_due = ScheduledEventExport.objects.create(
++        event=event, **_schedule_kwargs(user, schedule_next_run=datetime(2023, 3, 1, 11, 0, tzinfo=timezone.utc))
++    )
++    exhausted = ScheduledOrganizerExport.objects.create(
++        organizer=event.organizer, timezone='Europe/Berlin', **_schedule_kwargs(user, schedule_next_run=None)
++    )
++    with mock.patch.object(scheduled_event_export_task, 'apply_async') as event_apply, \
++            mock.patch.object(scheduled_organizer_export_task, 'apply_async') as organizer_apply:
++        run_scheduled_exports(sender=None)
++    event_apply.assert_not_called()
++    organizer_apply.assert_not_called()
++    not_due.refresh_from_db()
++    assert not_due.schedule_next_run == datetime(2023, 3, 1, 11, 0, tzinfo=timezone.utc)
++    exhausted.refresh_from_db()
++    assert exhausted.schedule_next_run is None
++
++
++@pytest.mark.django_db
++@freeze_time("2023-03-01 10:00:00")
++def test_scheduled_export_not_dispatched_twice(scheduled_event_export):
++    with mock.patch.object(scheduled_event_export_task, 'apply_async') as apply_async:
++        run_scheduled_exports(sender=None)
++        run_scheduled_exports(sender=None)
++    assert apply_async.call_count == 1
++
++
++@pytest.mark.django_db
++@freeze_time("2023-03-01 10:00:00")
++def test_failing_schedule_does_not_block_others(event, user, scheduled_event_export):
++    broken = ScheduledEventExport.objects.create(event=event, **_schedule_kwargs(user))
++    original_compute = ScheduledEventExport.compute_next_run
++
++    def compute_next_run(self):
++        if self.pk == broken.pk:
++            raise ValueError("broken rule")
++        return original_compute(self)
++
++    with mock.patch.object(ScheduledEventExport, 'compute_next_run', compute_next_run), \
++            mock.patch.object(scheduled_event_export_task, 'apply_async') as apply_async:
++        run_scheduled_exports(sender=None)
++    apply_async.assert_called_once_with(kwargs={
++        'event': event.pk,
++        'schedule': scheduled_event_export.pk,
++    })
++    broken.refresh_from_db()
++    assert broken.schedule_next_run == datetime(2023, 3, 1, 9, 0, tzinfo=timezone.utc)
++
++
++@pytest.mark.django_db
++@freeze_time("2023-03-01 10:00:00")
++def test_dispatch_failure_does_not_block_others(scheduled_event_export, scheduled_organizer_export):
++    with mock.patch.object(scheduled_event_export_task, 'apply_async', side_effect=ConnectionError) as event_apply, \
++            mock.patch.object(scheduled_organizer_export_task, 'apply_async') as organizer_apply:
++        run_scheduled_exports(sender=None)
++    event_apply.assert_called_once()
++    organizer_apply.assert_called_once()
++
++

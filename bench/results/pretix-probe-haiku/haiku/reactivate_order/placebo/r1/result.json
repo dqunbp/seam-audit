@@ -1,0 +1,73 @@
+{
+  "run_id": "haiku/reactivate_order/placebo/r1",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "reactivate_order",
+  "condition": "placebo",
+  "rep": 1,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 195.9,
+  "cost_usd": 0.036125979999999995,
+  "num_turns": 29,
+  "duration_s": 193.5,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 1,
+    "Read": 2,
+    "Bash": 17,
+    "Edit": 6
+  },
+  "files_read": [
+    "src/pretix/base/services/orders.py",
+    "src/pretix/control/views/orders.py"
+  ],
+  "skills_invoked": [
+    "careful-dev"
+  ],
+  "bash_commands": [
+    "git log --oneline -3 && git log -S\"def reactivate_order\" --oneline | head -5; grep -n \"reactivate\" -i doc/api/resources/orders.rst | head; sed -n 480,520p src/pretix/api/views/order.py; grep -n \"'unavailable'\\|error_messages = \\|'positions_removed'\" src/pretix/base/services/orders.py | head",
+    "sed -n 1297,1330p doc/api/resources/orders.rst; sed -n 1,140p src/pretix/base/services/orders.py | grep -n \"import\\|OF_SELF\\|LOCK\" | head -80; sed -n 128,150p src/pretix/base/services/orders.py; grep -n \"def extend_order\" -A30 src/pretix/base/services/orders.py | head -50",
+    "sed -n 246,280p src/pretix/base/services/orders.py; grep -n \"order_reactivated\" -B2 -A8 src/pretix/base/signals.py; grep -n \"def cancel_allowed\" -A12 src/pretix/base/models/orders.py; grep -rn \"def _check_positions_available\\|def _check_quota\\|def check_quotas\\|def _get_quota_availability\\|cancel_order.*reactivate\\|reactivate\" src/tests --include=*.py -l | head",
+    "grep -n \"def _is_still_available\" -A60 src/pretix/base/models/orders.py | head -90; grep -n \"def test_.*cancel\\|^class \\|def test_extend\" src/tests/base/test_orders.py | head -60; grep -n \"^from\\|^import\" src/tests/base/test_orders.py | head -40",
+    "sed -n 1109,1135p src/pretix/base/models/orders.py; sed -n 56,60p src/tests/base/test_orders.py; sed -n 1252,1331p src/tests/base/test_orders.py; grep -n \"def test_extend_\\|def test_expire\" src/tests/base/test_orders.py | head -5; sed -n 1,60p src/tests/base/test_orders.py | grep -n \"^def \\|fixture\" ",
+    "grep -n \"def pending_sum\\|def payment_refund_sum\\|def set_expires\\|def _is_still_available\\|def payment_sum\" -A3 src/pretix/base/models/orders.py | head -40; grep -rn \"_is_still_available(\" src/pretix --include=*.py | head; grep -n \"def invoice_qualified\" src/pretix/base/services/invoices.py src/pretix/base/*.py src/pretix/base/services/*.py 2>/dev/null | head -3; grep -n \"invoice_qualified\\|generate_invoice\" src/pretix/base/services/orders.py | head -4",
+    "sed -n 1036,1048p src/pretix/base/models/orders.py; sed -n 496,506p src/pretix/base/models/orders.py; sed -n 3313,3330p src/pretix/base/services/orders.py",
+    "tail -n 8 src/tests/base/test_orders.py | cat -A | cut -c1-120 | tail -n 8; grep -n \"Voucher\\|Quota,\\|GiftCard\" src/tests/base/test_orders.py | head -5",
+    "cat >> src/tests/base/test_orders.py <<'EOF'\n\n\nclass OrderReactivateTests(TestCase):\n    def setUp(self):\n        super().setUp()\n        self.o = Organizer.objects.create(name='Dummy', slug='dummy')\n        with scope(organizer=self.o):\n            self.event = Event.objects.create(organizer=self.o, name='Dummy', slug='dummy', date_from=now(),\n                                              plugins='tests.testdummy')\n            self.order = Order.objects.create(\n                code='FOO', event=self.event, email='dummy@dummy.test',\n                status=Order.STATUS_PENDING, locale='en',\n                datetime=now(), expires=now() + timedelta(days=10),\n                total=Decimal('46.00'),\n                sales_channel=self.event.organizer.sales_channels.get(identifier=\"web\"),\n            )\n            self.ticket = Item.objects.create(event=self.event, name='Early-bird ticket',\n                                              default_price=Decimal('23.00'), admission=True)\n            self.quota = self.event.quotas.create(name='Tickets', size=2)\n            self.quota.items.add(self.ticket)\n            self.op1 = OrderPosition.objects.create(\n                order=self.order, item=self.ticket, variation=None,\n                price=Decimal(\"23.00\"), attendee_name_parts={'full_name': \"Peter\"}, positionid=1\n            )\n            self.op2 = OrderPosition.objects.create(\n                order=self.order, item=self.ticket, variation=None,\n                price=Decimal(\"23.00\"), attendee_name_parts={'full_name': \"Dieter\"}, positionid=2\n            )\n            self.order.create_transactions()\n            generate_invoice(self.order)\n            djmail.outbox = []\n\n    @classscope(attr='o')\n    def test_reactivate_not_canceled(self):\n        with pytest.raises(OrderError):\n            reactivate_order(self.order)\n\n    @classscope(attr='o')\n    def test_reactivate_unpaid(self):\n        cancel_order(self.order.pk)\n        reactivate_order(self.order)\n        self.order.refresh_from_db()\n        assert self.order.status == Order.STATUS_PENDING\n        assert self.order.cancellation_date is None\n        assert self.order.expires > now()\n        assert self.order.all_logentries().last().action_type == 'pretix.event.order.reactivated'\n        assert self.order.transactions.count() == 2\n\n    @classscope(attr='o')\n    def test_reactivate_paid(self):\n        self.order.payments.create(state=OrderPayment.PAYMENT_STATE_CONFIRMED, amount=Decimal('46.00'),\n                                   provider='manual')\n        cancel_order(self.order.pk)\n        reactivate_order(self.order)\n        self.order.refresh_from_db()\n        assert self.order.status == Order.STATUS_PAID\n        assert self.order.cancellation_date is None\n\n    @classscope(attr='o')\n    def test_reactivate_generates_invoice(self):\n        cancel_order(self.order.pk)\n        assert self.order.invoices.count() == 2\n        reactivate_order(self.order)\n        assert self.order.invoices.count() == 3\n\n    @classscope(attr='o')\n    def test_reactivate_restores_voucher(self):\n        self.op1.voucher = self.event.vouchers.create(item=self.ticket, redeemed=1)\n        self.op1.save()\n        cancel_order(self.order.pk)\n        self.op1.voucher.refresh_from_db()\n        assert self.op1.voucher.redeemed == 0\n        reactivate_order(self.order)\n        self.op1.voucher.refresh_from_db()\n        assert self.op1.voucher.redeemed == 1\n\n    @classscope(attr='o')\n    def test_reactivate_unavailable(self):\n        cancel_order(self.order.pk)\n        self.quota.size = 1\n        self.quota.save()\n        with pytest.raises(OrderError):\n            reactivate_order(self.order)\n        self.order.refresh_from_db()\n        assert self.order.status == Order.STATUS_CANCELED\n\n    @classscope(attr='o')\n    def test_reactivate_unavailable_force(self):\n        cancel_order(self.order.pk)\n        self.quota.size = 1\n        self.quota.save()\n        reactivate_order(self.order, force=True)\n        self.order.refresh_from_db()\n        assert self.order.status == Order.STATUS_PENDING\nEOF\ncd src && timeout 900 python -m pytest tests/base/test_orders.py -k OrderReactivateTests -q -p no:cacheprovider 2>&1 | tail -n 40",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/reactivate_order/placebo/r1/repo/src && timeout 900 python -m pytest tests/base/test_orders.py -k OrderReactivateTests -q -p no:cacheprovider 2>&1 | tail -n 60",
+    "grep -rln \"reactivate\" tests | head; timeout 900 python -m pytest tests/base/test_orders.py -k \"OrderReactivateTests or OrderCancelTests\" -q -p no:cacheprovider 2>&1 | tail -n 5",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k \"OrderReactivateTests or OrderCancelTests\" -q -p no:cacheprovider 2>&1 | grep -E \"^(FAILED|E  |tests/.*Error|>)\" | head -30",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k \"OrderReactivateTests or OrderCancelTests\" -q -p no:cacheprovider 2>&1 | tail -n 1; grep -rln \"reactivate\" tests --include=*.py",
+    "(timeout 900 python -m pytest tests/api/test_orders.py -k \"cancel or reactivate\" -q -p no:cacheprovider 2>&1 | tail -n 1); (python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -n 5; echo \"flake8 exit: $?\"); (python -m isort --check-only --diff pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -n 5)",
+    "timeout 900 python -m pytest tests/api/test_orders.py -k \"cancel or reactivate\" -q -p no:cacheprovider 2>&1 | tail -n 1",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit: $?\"; python -m isort --check-only pretix/base/services/orders.py tests/base/test_orders.py; echo \"isort exit: $?\"",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py"
+  ],
+  "seam_table": false,
+  "output_chars": 4980,
+  "hidden": {
+    "base.test_orders.OrderReactivateTest::test_paid": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_gift_card": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_membership": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_paid": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_seat_taken": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_sold_out": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_unpaid": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_voucher_budget": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_voucher_ok": true,
+    "base.test_orders.OrderReactivateTest::test_reactivate_voucher_used": true,
+    "api.test_orders::test_order_reactivate": true,
+    "api.test_orders::test_order_reactivate_invalid": true,
+    "control.test_orders::test_order_reactivate_not_canceled": true,
+    "control.test_orders::test_order_reactivate": true
+  },
+  "hidden_passed": 14,
+  "hidden_total": 14,
+  "visible_green": true,
+  "visible_passed": 423,
+  "visible_total": 423,
+  "diff_lines": 163
+}

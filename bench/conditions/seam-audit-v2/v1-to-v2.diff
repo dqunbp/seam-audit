@@ -1,0 +1,45 @@
+--- SKILL.md	2026-10-29 13:44:49.290937734 +0000
++++ bench/conditions/seam-audit-v2/SKILL.md	2026-10-30 05:59:05.843423597 +0000
+@@ -28,12 +28,13 @@
+ 2. **Review your own design before coding.** Ask: *what objection would I raise against this design in review?* Find the seams yourself — while the code isn't written yet, it's free.
+ 3. **Every assumption — stated and evidenced.** For everything the feature relies on: *what I rely on → the assumption I'm making → what backs it.* An assumption with no evidence is your future bug report. Close it now.
+ 4. **Ask about the boundary, not the center.** For each contract think not "what do I think it returns on good input," but "what does it return on empty/error/unusual input — and am I duplicating a path that already exists nearby."
++5. **Seams run both ways.** Besides what your code relies on, find what already relies on your code: extension points documented as "called when …", settings and flags waiting for a writer, UI and docs that promise a behavior. Those are contracts on you, and you only learn about them by searching — they are exactly the seams you don't know to look for.
+ 
+ ## Procedure
+ 
+ ### Step 1. Enumerate the seams
+ 
+-List everything the new code will talk to. A seam is any point where you rely on someone else's contract. Typical places seams hide (this is where to look, not what exactly to check):
++List everything the new code will talk to. A seam is any point where you rely on someone else's contract — **or where someone else relies on yours**. Typical places seams hide (this is where to look, not what exactly to check):
+ 
+ - **Money / billing / quotas** — does a canonical path already exist (a charge/deduct function, a grant helper, a webhook flow), and are you going through it rather than around it.
+ - **External dependency** — the real shape of the response from the SDK / API / external service (including the empty, rejected, variant, and error responses).
+@@ -47,6 +48,14 @@
+ 
+ The project's agent instructions file (CLAUDE.md, AGENTS.md, CONVENTIONS.md, …) often names the canonical paths and invariants — treat those as the project-specific seam map. Don't stop at this list — it covers the typical spots, not all of them. Find the seams specific to your feature.
+ 
++**Then find what already expects your code.** The list above is built from what you already know to look for; the seams that bite are the ones you don't. The behavior you're adding is often anticipated elsewhere — the rest of the system was built around it. Search the **whole repository** (code, templates, docs — not only the module you're editing) for the feature's key nouns and for the names of every field, setting, flag, log type, signal and template your code will touch. Every hit that describes or anticipates the behavior is an inbound seam:
++
++- an **extension point** whose docs say it is called when your code runs (a provider or plugin method, a signal or hook that nothing sends yet) — your code must call it and respect its answer;
++- a **promise** about the behavior: a setting's help text, a flag or field that nothing writes yet, a declared log/audit type, a UI or timeline that shows when the thing happens — your code must keep it;
++- the **closest sibling** doing the same kind of work (a job of the same kind, the reverse operation, the same action on another entity) — its filters, guards and edge-case rules are the house rules.
++
++Add each to the seam table like any other seam.
++
+ ### Step 2. For each seam — assumption → evidence
+ 
+ Don't imagine the contract — **go read it** (open the real file, or the dependency's official docs — via a docs tool like context7 if one is available). Fill the table:
+@@ -72,9 +81,11 @@
+ 
+ Recovery is designed together with the feature, not bolted on after the incident. Bake both into the design before coding.
+ 
++**Don't invent policy the codebase already has.** For each edge case, and for every choice about who is included, when something happens and what gets skipped, first look up how the closest existing code facing the same situation handles it (the sibling from Step 1, the reverse operation, the same feature elsewhere). Match it, or write down why yours differs. A choice that silently differs from its sibling is a review comment waiting to happen.
++
+ ## Output
+ 
+-Before implementing, show: (1) the seam table with evidence, (2) the unhappy-path list, (3) an explicit answer to where the new code runs parallel to existing code and why you aren't reusing the canonical path. Only then write code.
++Before implementing, show: (1) the seam table with evidence, including the inbound expectations you found and how the code honors each, (2) the unhappy-path list, naming for each edge case the existing code whose policy you follow, (3) an explicit answer to where the new code runs parallel to existing code and why you aren't reusing the canonical path. Only then write code.
+ 
+ ## After the code — a quick self-check
+ 

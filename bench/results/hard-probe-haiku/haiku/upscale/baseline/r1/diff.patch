@@ -1,0 +1,333 @@
+diff --git a/pixforge/features/upscale.py b/pixforge/features/upscale.py
+new file mode 100644
+index 0000000..0588205
+--- /dev/null
++++ b/pixforge/features/upscale.py
+@@ -0,0 +1,79 @@
++"""2x upscaling of one of the user's images."""
++import logging
++
++from lumen_sdk import LumenClient, LumenError, LumenRateLimited
++
++from .. import jobs, storage
++from ..billing import InsufficientCredits, charge_credits
++from ..i18n import t
++from ..images import get_image, save_image
++from ..jobs import JobStatus
++from ..pricing import price_for
++from ..users import get_user
++from .common import fail_job, response_for
++
++log = logging.getLogger(__name__)
++
++
++def upscale_image(
++    conn, client: LumenClient, user_id: int, image_id: int, request_id: str, locale: str = "en"
++) -> dict:
++    """Upscale `image_id` 2x and add the result to the user's library.
++
++    Returns the same shape as `generate_image`.
++    """
++    existing = jobs.get_job_by_request(conn, request_id)
++    if existing is not None:
++        return response_for(existing, locale)
++
++    source = get_image(conn, image_id)
++    if source is None or source["user_id"] != user_id:
++        return {
++            "ok": False,
++            "job_id": None,
++            "status": None,
++            "error_code": "not_found",
++            "message": t("errors.not_found", locale),
++        }
++
++    user = get_user(conn, user_id)
++    cost = price_for("upscale", user["plan"])
++    job_id = jobs.create_job(conn, user_id, "upscale", request_id, cost, source_image_id=image_id)
++
++    try:
++        charge_credits(conn, user_id, cost, "upscale", f"charge:upscale:{request_id}")
++    except InsufficientCredits:
++        fail_job(conn, job_id, "insufficient_credits", refund=False)
++        return response_for(jobs.get_job(conn, job_id), locale)
++
++    try:
++        result = client.upscale(storage.public_url(source["storage_key"]), factor=2)
++    except LumenRateLimited:
++        fail_job(conn, job_id, "rate_limited", refund=True)
++        return response_for(jobs.get_job(conn, job_id), locale)
++    except LumenError:
++        log.exception("lumen upscale failed for job %s", job_id)
++        fail_job(conn, job_id, "provider_failed", refund=True)
++        return response_for(jobs.get_job(conn, job_id), locale)
++
++    # A "rejected" result echoes the input image back unchanged, so it must never reach the library.
++    if result.status == "rejected":
++        log.info("lumen rejected upscale job %s: %s", job_id, result.reason)
++        fail_job(conn, job_id, "upscale_rejected", refund=True)
++        return response_for(jobs.get_job(conn, job_id), locale)
++
++    if result.status == "filtered":
++        log.info("lumen filtered upscale job %s: %s", job_id, result.reason)
++        fail_job(conn, job_id, "content_filtered", refund=True)
++        return response_for(jobs.get_job(conn, job_id), locale)
++
++    if result.status != "succeeded" or result.image is None:
++        log.error("lumen upscale job %s returned status %s without an image", job_id, result.status)
++        fail_job(conn, job_id, "provider_failed", refund=True)
++        return response_for(jobs.get_job(conn, job_id), locale)
++
++    output = result.image
++    key = storage.import_remote(output.url)
++    save_image(conn, user_id, key, output.width, output.height)
++    jobs.transition(conn, job_id, {JobStatus.PENDING}, JobStatus.SUCCEEDED, output_key=key)
++    return response_for(jobs.get_job(conn, job_id), locale)
+diff --git a/pixforge/jobs.py b/pixforge/jobs.py
+index 8cb39a8..35b8a89 100644
+--- a/pixforge/jobs.py
++++ b/pixforge/jobs.py
+@@ -26,12 +26,14 @@ TERMINAL = frozenset({JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.TIMED_OUT
+ _UPDATABLE_FIELDS = {"provider_job_id", "output_key", "error"}
+ 
+ 
+-def create_job(conn, user_id: int, kind: str, request_id: str, cost: int) -> int:
++def create_job(
++    conn, user_id: int, kind: str, request_id: str, cost: int, source_image_id: int | None = None
++) -> int:
+     now = clock.iso_now()
+     cur = conn.execute(
+-        "INSERT INTO jobs (user_id, kind, status, request_id, cost, created_at, updated_at)"
+-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+-        (user_id, kind, JobStatus.PENDING, request_id, cost, now, now),
++        "INSERT INTO jobs (user_id, kind, status, request_id, cost, source_image_id, created_at, updated_at)"
++        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
++        (user_id, kind, JobStatus.PENDING, request_id, cost, source_image_id, now, now),
+     )
+     return cur.lastrowid
+ 
+diff --git a/pixforge/locales/en.json b/pixforge/locales/en.json
+index 76c2021..47fa783 100644
+--- a/pixforge/locales/en.json
++++ b/pixforge/locales/en.json
+@@ -4,6 +4,7 @@
+   "errors.rate_limited": "The service is busy right now. Please try again in a minute. Your credits have been refunded.",
+   "errors.content_filtered": "The result was blocked by the content filter. Your credits have been refunded.",
+   "errors.timed_out": "Generation took too long and was cancelled. Your credits have been refunded.",
++  "errors.upscale_rejected": "This image can't be upscaled (it may be too large or in an unsupported format). Your credits have been refunded.",
+   "errors.daily_video_limit": "You have reached today's free plan limit of {limit} videos.",
+   "errors.not_found": "Not found."
+ }
+diff --git a/pixforge/locales/ru.json b/pixforge/locales/ru.json
+index 18b4f23..2e62acf 100644
+--- a/pixforge/locales/ru.json
++++ b/pixforge/locales/ru.json
+@@ -4,6 +4,7 @@
+   "errors.rate_limited": "Сервис сейчас перегружен. Попробуйте через минуту. Кредиты возвращены.",
+   "errors.content_filtered": "Результат заблокирован фильтром контента. Кредиты возвращены.",
+   "errors.timed_out": "Генерация заняла слишком много времени и была отменена. Кредиты возвращены.",
++  "errors.upscale_rejected": "Это изображение нельзя увеличить (возможно, оно слишком большое или в неподдерживаемом формате). Кредиты возвращены.",
+   "errors.daily_video_limit": "Вы исчерпали дневной лимит бесплатного тарифа: {limit} видео.",
+   "errors.not_found": "Не найдено."
+ }
+diff --git a/pixforge/migrations/003_upscale.sql b/pixforge/migrations/003_upscale.sql
+new file mode 100644
+index 0000000..2113496
+--- /dev/null
++++ b/pixforge/migrations/003_upscale.sql
+@@ -0,0 +1 @@
++ALTER TABLE jobs ADD COLUMN source_image_id INTEGER REFERENCES images(id);
+diff --git a/pixforge/pricing.py b/pixforge/pricing.py
+index 01c5501..dc74b57 100644
+--- a/pixforge/pricing.py
++++ b/pixforge/pricing.py
+@@ -4,6 +4,7 @@ import math
+ BASE_PRICES = {
+     "image": 2,
+     "video": 20,
++    "upscale": 4,
+ }
+ 
+ # Pro subscribers pay half price (rounded up) for every paid operation.
+diff --git a/tests/fakes.py b/tests/fakes.py
+index b3e7567..080d56b 100644
+--- a/tests/fakes.py
++++ b/tests/fakes.py
+@@ -1,4 +1,4 @@
+-from lumen_sdk import ImageResult, OutputImage, VideoJob
++from lumen_sdk import ImageResult, OutputImage, UpscaleResult, VideoJob
+ 
+ 
+ class FakeLumenClient:
+@@ -6,12 +6,15 @@ class FakeLumenClient:
+ 
+     Set `fail_with` to an exception to make the next call raise it, or
+     `filter_next = True` to make the next generation come back filtered.
++    Set `upscale_next_status` to "rejected" or "filtered" to make the next upscale
++    come back that way (a rejected upscale echoes the input image, as Lumen does).
+     """
+ 
+     def __init__(self):
+         self.calls: list[tuple] = []
+         self.fail_with: Exception | None = None
+         self.filter_next = False
++        self.upscale_next_status: str | None = None
+         self._seq = 0
+ 
+     def _next_id(self, prefix: str) -> str:
+@@ -37,6 +40,24 @@ class FakeLumenClient:
+             images=[OutputImage(url=f"https://cdn.lumen.test/{result_id}.png", width=width, height=height)],
+         )
+ 
++    def upscale(self, image_url: str, factor: int = 2) -> UpscaleResult:
++        self.calls.append(("upscale", image_url))
++        self._maybe_fail()
++        result_id = self._next_id("ups")
++        # The fake assumes a 1024x1024 input, so the output is 2048x2048.
++        input_image = OutputImage(url=image_url, width=1024, height=1024)
++        status, self.upscale_next_status = self.upscale_next_status or "succeeded", None
++        if status == "rejected":
++            return UpscaleResult(id=result_id, status="rejected", image=input_image, reason="input_too_large")
++        if status == "filtered":
++            return UpscaleResult(id=result_id, status="filtered", image=None, reason="policy")
++        output_url = f"https://cdn.lumen.test/{result_id}.png"
++        return UpscaleResult(
++            id=result_id,
++            status="succeeded",
++            image=OutputImage(url=output_url, width=1024 * factor, height=1024 * factor),
++        )
++
+     def create_video(self, prompt: str, callback_url: str, duration_s: int = 5) -> VideoJob:
+         self.calls.append(("create_video", prompt))
+         self._maybe_fail()
+diff --git a/tests/test_upscale.py b/tests/test_upscale.py
+new file mode 100644
+index 0000000..d5042d0
+--- /dev/null
++++ b/tests/test_upscale.py
+@@ -0,0 +1,125 @@
++from lumen_sdk import LumenAPIError, LumenRateLimited
++
++from pixforge.billing import get_balance
++from pixforge.features.upscale import upscale_image
++from pixforge.images import list_images, save_image
++from pixforge.jobs import get_job
++from pixforge.pricing import price_for
++from pixforge.users import create_user
++
++
++def _source_image(conn, user_id, storage_key="media/source.png"):
++    return save_image(conn, user_id, storage_key, 1024, 1024)
++
++
++def test_upscales_charges_and_adds_to_library(conn, lumen, user_id):
++    source_id = _source_image(conn, user_id)
++    response = upscale_image(conn, lumen, user_id, source_id, "req-1")
++    assert response["ok"]
++    assert response["status"] == "succeeded"
++    assert response["url"].startswith("https://media.pixforge.test/")
++    assert get_balance(conn, user_id) == 96
++    images = list_images(conn, user_id)
++    assert len(images) == 2
++    assert (images[1]["width"], images[1]["height"]) == (2048, 2048)
++
++
++def test_job_records_source_image(conn, lumen, user_id):
++    source_id = _source_image(conn, user_id)
++    response = upscale_image(conn, lumen, user_id, source_id, "req-1")
++    job = get_job(conn, response["job_id"])
++    assert job["kind"] == "upscale"
++    assert job["source_image_id"] == source_id
++    assert job["cost"] == 4
++
++
++def test_sends_source_image_url_to_lumen(conn, lumen, user_id):
++    source_id = _source_image(conn, user_id, storage_key="media/source.png")
++    upscale_image(conn, lumen, user_id, source_id, "req-1")
++    assert len(lumen.calls) == 1
++    assert lumen.calls[0][0] == "upscale"
++    assert lumen.calls[0][1].startswith("https://media.pixforge.test/media/source.png?")
++
++
++def test_pro_pays_half(conn, lumen, pro_user_id):
++    source_id = _source_image(conn, pro_user_id)
++    upscale_image(conn, lumen, pro_user_id, source_id, "req-1")
++    assert get_balance(conn, pro_user_id) == 98
++
++
++def test_price_follows_standard_rules():
++    assert price_for("upscale", "free") == 4
++    assert price_for("upscale", "pro") == 2
++
++
++def test_retry_with_same_request_id_is_not_charged_twice(conn, lumen, user_id):
++    source_id = _source_image(conn, user_id)
++    first = upscale_image(conn, lumen, user_id, source_id, "req-1")
++    second = upscale_image(conn, lumen, user_id, source_id, "req-1")
++    assert second == first
++    assert get_balance(conn, user_id) == 96
++    assert len(lumen.calls) == 1
++    assert len(list_images(conn, user_id)) == 2
++
++
++def test_rejected_input_is_refunded_and_not_added_to_library(conn, lumen, user_id):
++    source_id = _source_image(conn, user_id)
++    lumen.upscale_next_status = "rejected"
++    response = upscale_image(conn, lumen, user_id, source_id, "req-1")
++    assert not response["ok"]
++    assert response["error_code"] == "upscale_rejected"
++    assert get_balance(conn, user_id) == 100
++    # Lumen echoes the input back on rejection; it must not become a new library image.
++    assert [img["id"] for img in list_images(conn, user_id)] == [source_id]
++
++
++def test_filtered_result_is_refunded(conn, lumen, user_id):
++    source_id = _source_image(conn, user_id)
++    lumen.upscale_next_status = "filtered"
++    response = upscale_image(conn, lumen, user_id, source_id, "req-1")
++    assert response["error_code"] == "content_filtered"
++    assert get_balance(conn, user_id) == 100
++    assert len(list_images(conn, user_id)) == 1
++
++
++def test_provider_error_is_refunded(conn, lumen, user_id):
++    source_id = _source_image(conn, user_id)
++    lumen.fail_with = LumenAPIError(500, "internal", "boom")
++    response = upscale_image(conn, lumen, user_id, source_id, "req-1")
++    assert response["error_code"] == "provider_failed"
++    assert get_balance(conn, user_id) == 100
++
++
++def test_rate_limited_is_refunded(conn, lumen, user_id):
++    source_id = _source_image(conn, user_id)
++    lumen.fail_with = LumenRateLimited(5)
++    response = upscale_image(conn, lumen, user_id, source_id, "req-1")
++    assert response["error_code"] == "rate_limited"
++    assert get_balance(conn, user_id) == 100
++
++
++def test_insufficient_credits_does_not_call_provider(conn, lumen):
++    poor = create_user(conn, "poor@example.com", balance=1)
++    source_id = _source_image(conn, poor)
++    response = upscale_image(conn, lumen, poor, source_id, "req-1", locale="ru")
++    assert response["error_code"] == "insufficient_credits"
++    assert "4" in response["message"]
++    assert lumen.calls == []
++
++
++def test_cannot_upscale_another_users_image(conn, lumen, user_id):
++    owner_image = _source_image(conn, user_id)
++    other = create_user(conn, "other@example.com", balance=100)
++    response = upscale_image(conn, lumen, other, owner_image, "req-1")
++    assert not response["ok"]
++    assert response["error_code"] == "not_found"
++    assert response["job_id"] is None
++    assert lumen.calls == []
++    assert get_balance(conn, other) == 100
++
++
++def test_unknown_image_is_not_found(conn, lumen, user_id):
++    response = upscale_image(conn, lumen, user_id, 999, "req-1")
++    assert response["error_code"] == "not_found"
++    assert lumen.calls == []
++    assert get_balance(conn, user_id) == 100

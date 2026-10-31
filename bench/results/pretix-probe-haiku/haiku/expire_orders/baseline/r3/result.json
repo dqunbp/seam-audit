@@ -1,0 +1,55 @@
+{
+  "run_id": "haiku/expire_orders/baseline/r3",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "expire_orders",
+  "condition": "baseline",
+  "rep": 3,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 77.5,
+  "cost_usd": 0.01613361,
+  "num_turns": 15,
+  "duration_s": 75.0,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Bash": 10,
+    "Edit": 3,
+    "Read": 1
+  },
+  "files_read": [
+    "src/tests/base/test_orders.py"
+  ],
+  "skills_invoked": [],
+  "bash_commands": [
+    "git status --short | head && git log --oneline -3 && grep -rn \"periodic\" src/pretix --include=*.py | grep -v tests | head -40 && grep -n \"expir\" -i src/pretix/base/services/orders.py | head -60",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/baseline/r3/repo/src && sed -n 1430,1510p pretix/base/services/orders.py && sed -n 355,385p pretix/base/services/orders.py && sed -n 1,40p pretix/base/services/orders.py | grep -n import; grep -rn \"payment_term_expire_automatically\" pretix --include=*.py | grep -v tests | head -20; grep -rn \"expire_orders\\|def expire\" pretix --include=*.py | head",
+    "sed -n 1070,1085p pretix/base/settings.py && sed -n 925,960p pretix/base/models/orders.py && grep -n \"def set_expires\" -A30 pretix/base/models/orders.py | head -50; grep -rn \"send_expiry_warnings\\|mark_order_expired\" tests --include=*.py | head; sed -n 1,80p pretix/helpers/periodic.py | grep -n \"def \\|minimum\" ",
+    "grep -rn \"order_expired\\b\\|mail_text_order_expired\\|pretix.event.order.expired\" pretix --include=*.py | grep -v \"migrations\" | head -20; sed -n 640,700p tests/base/test_orders.py; grep -n \"^class \\|^from\\|^import\" tests/base/test_orders.py | head -80",
+    "sed -n 56,60p tests/base/test_orders.py && sed -n 700,720p tests/base/test_orders.py",
+    "python - <<'EOF'\nimport re\np = 'tests/base/test_orders.py'\ns = open(p).read()\ns = s.replace(\"\"\"    deny_order, reactivate_order, send_download_reminders,\n    send_expiry_warnings,\n)\"\"\", \"\"\"    deny_order, expire_orders, reactivate_order, send_download_reminders,\n    send_expiry_warnings,\n)\"\"\", 1)\nnew_tests = '''class OrderExpireTests(TestCase):\n    def setUp(self):\n        super().setUp()\n        self.o = Organizer.objects.create(name='Dummy', slug='dummy')\n        with scope(organizer=self.o):\n            self.event = Event.objects.create(\n                organizer=self.o, name='Dummy', slug='dummy',\n                date_from=now() + timedelta(days=2),\n                plugins='pretix.plugins.banktransfer'\n            )\n            self.event.settings.payment_term_expire_automatically = True\n            self.order = self._create_order('FOO', expires=now() - timedelta(days=1))\n\n    def _create_order(self, code, event=None, **kwargs):\n        event = event or self.event\n        defaults = dict(\n            code=code, event=event, email='dummy@dummy.test',\n            status=Order.STATUS_PENDING, locale='en',\n            datetime=now() - timedelta(days=3),\n            expires=now() + timedelta(days=10),\n            total=Decimal('46.00'),\n            sales_channel=event.organizer.sales_channels.get(identifier=\"web\"),\n        )\n        defaults.update(kwargs)\n        return Order.objects.create(**defaults)\n\n    @classscope(attr='o')\n    def test_expires_overdue_pending_order(self):\n        expire_orders(sender=self.event)\n        self.order.refresh_from_db()\n        assert self.order.status == Order.STATUS_EXPIRED\n        assert self.order.all_logentries().filter(action_type='pretix.event.order.expired').exists()\n\n    @classscope(attr='o')\n    def test_keeps_order_before_deadline(self):\n        self.order.expires = now() + timedelta(hours=1)\n        self.order.save()\n        expire_orders(sender=self.event)\n        self.order.refresh_from_db()\n        assert self.order.status == Order.STATUS_PENDING\n\n    @classscope(attr='o')\n    def test_disabled_setting_keeps_order_pending(self):\n        self.event.settings.payment_term_expire_automatically = False\n        expire_orders(sender=self.event)\n        self.order.refresh_from_db()\n        assert self.order.status == Order.STATUS_PENDING\n\n    @classscope(attr='o')\n    def test_setting_is_evaluated_per_event(self):\n        with scope(organizer=self.o):\n            other_event = Event.objects.create(\n                organizer=self.o, name='Other', slug='other',\n                date_from=now() + timedelta(days=2),\n            )\n        other_event.settings.payment_term_expire_automatically = False\n        other_order = self._create_order('BAR', event=other_event, expires=now() - timedelta(days=1))\n\n        expire_orders(sender=self.event)\n        self.order.refresh_from_db()\n        other_order.refresh_from_db()\n        assert self.order.status == Order.STATUS_EXPIRED\n        assert other_order.status == Order.STATUS_PENDING\n\n    @classscope(attr='o')\n    def test_ignores_paid_and_expired_orders(self):\n        paid = self._create_order('PAID', status=Order.STATUS_PAID, expires=now() - timedelta(days=1))\n        expire_orders(sender=self.event)\n        paid.refresh_from_db()\n        assert paid.status == Order.STATUS_PAID\n\n    @classscope(attr='o')\n    def test_ignores_orders_requiring_approval(self):\n        self.order.require_approval = True\n        self.order.save()\n        expire_orders(sender=self.event)\n        self.order.refresh_from_db()\n        assert self.order.status == Order.STATUS_PENDING\n\n    @classscope(attr='o')\n    def test_ignores_valid_if_pending_orders(self):\n        self.order.valid_if_pending = True\n        self.order.save()\n        expire_orders(sender=self.event)\n        self.order.refresh_from_db()\n        assert self.order.status == Order.STATUS_PENDING\n\n    @classscope(attr='o')\n    def test_ignores_orders_with_cancellation_fee(self):\n        self.order.fees.create(fee_type=OrderFee.FEE_TYPE_CANCELLATION, value=Decimal('5.00'))\n        expire_orders(sender=self.event)\n        self.order.refresh_from_db()\n        assert self.order.status == Order.STATUS_PENDING\n\n\nclass PaymentReminderTests(TestCase):'''\ns = s.replace('class PaymentReminderTests(TestCase):', new_tests, 1)\nopen(p, 'w').write(s)\nEOF\ntimeout 900 python -m pytest tests/base/test_orders.py -k \"OrderExpireTests or PaymentReminderTests\" -q -p no:cacheprovider 2>&1 | tail -30",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k \"OrderExpireTests or PaymentReminderTests\" -q -p no:cacheprovider 2>&1 | tail -30",
+    "(python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -5; echo \"flake8 exit: $?\") ; git -C .. status --short",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/baseline/r3/repo && python -m flake8 src/pretix/base/services/orders.py src/tests/base/test_orders.py; echo \"flake8 exit: $?\"; git status --short",
+    "python -m flake8 /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/baseline/r3/repo/src/pretix/base/services/orders.py /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/expire_orders/baseline/r3/repo/src/tests/base/test_orders.py; echo \"flake8 exit: $?\""
+  ],
+  "seam_table": false,
+  "output_chars": 2126,
+  "hidden": {
+    "base.test_orders::test_expiring": true,
+    "base.test_orders::test_expiring_paid_invoice": true,
+    "base.test_orders::test_expire_twice": true,
+    "base.test_orders::test_expire_skipped_if_canceled_with_fee": true,
+    "base.test_orders::test_expiring_auto_disabled": true,
+    "base.test_orders::test_expiring_auto_delayed": false,
+    "base.test_orders::test_expiring_auto_delayed_weekdays": true,
+    "base.test_orders::test_do_not_expire_if_approval_pending": true
+  },
+  "hidden_passed": 7,
+  "hidden_total": 8,
+  "visible_green": true,
+  "visible_passed": 430,
+  "visible_total": 430,
+  "diff_lines": 117
+}

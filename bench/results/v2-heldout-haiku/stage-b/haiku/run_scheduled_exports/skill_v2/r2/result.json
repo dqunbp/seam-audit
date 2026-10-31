@@ -1,0 +1,69 @@
+{
+  "run_id": "haiku/run_scheduled_exports/skill_v2/r2",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "run_scheduled_exports",
+  "condition": "skill_v2",
+  "rep": 2,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 116.1,
+  "cost_usd": 0.03013013,
+  "num_turns": 28,
+  "duration_s": 113.7,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Bash": 9,
+    "Grep": 3,
+    "Read": 9,
+    "Edit": 4
+  },
+  "files_read": [
+    "src/pretix/api/signals.py",
+    "src/pretix/base/models/exports.py",
+    "src/pretix/base/services/cleanup.py",
+    "src/pretix/base/services/tasks.py",
+    "src/pretix/control/views/orders.py",
+    "src/pretix/helpers/periodic.py",
+    "src/tests/base/test_export.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-stageB/haiku/run_scheduled_exports/skill_v2/r2/repo/src && cat pretix/base/services/export.py && grep -rn \"periodic_task\\|scheduled_export\\|ScheduledExport\\|ScheduledEventExport\\|ScheduledOrganizerExport\" --include=*.py pretix | grep -v migrations | head -60",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-stageB/haiku/run_scheduled_exports/skill_v2/r2/repo && grep -rn \"run_scheduled_exports\\|scheduled_export\" --include=*.py --include=*.rst --include=*.txt --include=*.md . | grep -v \"migrations\\|/control/\\|/api/\" | head -30; echo ---; cat src/pretix/base/models/exports.py | sed -n 1,400p | grep -n \"class \\|def \\|models\\.\\|next\\|last_run\\|schedule_\" | head -80; echo ---; sed -n 30,110p src/pretix/base/services/cleanup.py; echo ---; git log --oneline -3",
+    "R=/tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-stageB/haiku/run_scheduled_exports/skill_v2/r2/repo; grep -rn \"run_scheduled_exports\\|scheduled_export\" --include=*.py --include=*.rst --include=*.txt $R/src/pretix/base $R/doc 2>/dev/null | grep -v migrations | head -30; echo ---; grep -n \"class \\|next\\|last_run\\|schedule_\\|rrule\\|tz\\b\" $R/src/pretix/base/models/exports.py | head -80; echo ---; sed -n 36,100p $R/src/pretix/base/services/cleanup.py",
+    "ls tests/base | grep -i \"export\\|periodic\"; sed -n 1,60p tests/base/test_runperiodic.py | tail -40; grep -n \"ALWAYS_EAGER\\|always_eager\" pretix/testutils/settings.py pretix/settings.py | head",
+    "grep -rln \"django_capture_on_commit_callbacks\" tests | head -3; grep -n \"OF_SELF\" pretix/base/services/export.py pretix/helpers/__init__.py | head -5; tail -c 200 pretix/base/services/export.py | od -c | tail -3",
+    "cat >> tests/base/test_export.py <<'EOF'\n@pytest.mark.django_db\n@freeze_time(\"2023-01-19 07:00:00\")\ndef test_run_scheduled_event_export_dispatches_due_and_advances(event, user, django_capture_on_commit_callbacks):\n    tz = ZoneInfo(\"Europe/Berlin\")\n    due = ScheduledEventExport.objects.create(\n        event=event, owner=user, locale=\"en\", export_identifier=\"orders\", export_form_data={},\n        mail_subject=\"Export\", mail_template=\"Here it is\",\n        schedule_rrule=\"DTSTART:20230101T000000\\nRRULE:FREQ=DAILY\",\n        schedule_rrule_time=time(6, 30),\n        schedule_next_run=datetime(2023, 1, 19, 6, 30, tzinfo=tz),\n    )\n    not_due = ScheduledEventExport.objects.create(\n        event=event, owner=user, locale=\"en\", export_identifier=\"orders\", export_form_data={},\n        mail_subject=\"Export\", mail_template=\"Here it is\",\n        schedule_rrule=\"DTSTART:20230101T000000\\nRRULE:FREQ=DAILY\",\n        schedule_rrule_time=time(9, 0),\n        schedule_next_run=datetime(2023, 1, 19, 9, 0, tzinfo=tz),\n    )\n    with mock.patch.object(scheduled_event_export, \"apply_async\") as apply_async, \\\n            django_capture_on_commit_callbacks(execute=True):\n        run_scheduled_exports(sender=None)\n\n    apply_async.assert_called_once_with(kwargs={\"event\": event.pk, \"schedule\": due.pk})\n    due.refresh_from_db()\n    assert due.schedule_next_run == datetime(2023, 1, 20, 6, 30, tzinfo=tz)\n    not_due.refresh_from_db()\n    assert not_due.schedule_next_run == datetime(2023, 1, 19, 9, 0, tzinfo=tz)\n\n\n@pytest.mark.django_db\n@freeze_time(\"2023-01-19 07:00:00\")\ndef test_run_scheduled_event_export_not_dispatched_twice(event, user, django_capture_on_commit_callbacks):\n    tz = ZoneInfo(\"Europe/Berlin\")\n    ScheduledEventExport.objects.create(\n        event=event, owner=user, locale=\"en\", export_identifier=\"orders\", export_form_data={},\n        mail_subject=\"Export\", mail_template=\"Here it is\",\n        schedule_rrule=\"DTSTART:20230101T000000\\nRRULE:FREQ=DAILY\",\n        schedule_rrule_time=time(6, 30),\n        schedule_next_run=datetime(2023, 1, 19, 6, 30, tzinfo=tz),\n    )\n    with mock.patch.object(scheduled_event_export, \"apply_async\") as apply_async, \\\n            django_capture_on_commit_callbacks(execute=True):\n        run_scheduled_exports(sender=None)\n        run_scheduled_exports(sender=None)\n    assert apply_async.call_count == 1\n\n\n@pytest.mark.django_db\n@freeze_time(\"2023-01-19 07:00:00\")\ndef test_run_scheduled_organizer_export_dispatches_due_and_advances(event, user, django_capture_on_commit_callbacks):\n    tz = ZoneInfo(\"Europe/Berlin\")\n    organizer = event.organizer\n    due = ScheduledOrganizerExport.objects.create(\n        organizer=organizer, owner=user, locale=\"en\", export_identifier=\"orders\", export_form_data={},\n        mail_subject=\"Export\", mail_template=\"Here it is\", timezone=\"Europe/Berlin\",\n        schedule_rrule=\"DTSTART:20230101T000000\\nRRULE:FREQ=DAILY\",\n        schedule_rrule_time=time(6, 30),\n        schedule_next_run=datetime(2023, 1, 19, 6, 30, tzinfo=tz),\n    )\n    not_due = ScheduledOrganizerExport.objects.create(\n        organizer=organizer, owner=user, locale=\"en\", export_identifier=\"orders\", export_form_data={},\n        mail_subject=\"Export\", mail_template=\"Here it is\", timezone=\"Europe/Berlin\",\n        schedule_rrule=\"DTSTART:20230101T000000\\nRRULE:FREQ=DAILY\",\n        schedule_rrule_time=time(9, 0),\n        schedule_next_run=datetime(2023, 1, 19, 9, 0, tzinfo=tz),\n    )\n    with mock.patch.object(scheduled_organizer_export, \"apply_async\") as apply_async, \\\n            django_capture_on_commit_callbacks(execute=True):\n        run_scheduled_exports(sender=None)\n\n    apply_async.assert_called_once_with(kwargs={\"organizer\": organizer.pk, \"schedule\": due.pk})\n    due.refresh_from_db()\n    assert due.schedule_next_run == datetime(2023, 1, 20, 6, 30, tzinfo=tz)\n    not_due.refresh_from_db()\n    assert not_due.schedule_next_run == datetime(2023, 1, 19, 9, 0, tzinfo=tz)\nEOF\npython - <<'EOF'\nimport re\np='tests/base/test_export.py'\ns=open(p).read()\ns=s.replace(\"\"\"from datetime import datetime, time, timedelta, timezone\n\nimport pytest\n\"\"\",\"\"\"from datetime import datetime, time, timedelta, timezone\nfrom unittest import mock\nfrom zoneinfo import ZoneInfo\n\nimport pytest\n\"\"\",1)\ns=s.replace(\"\"\"from pretix.base.models import (\n    Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,\n)\n\"\"\",\"\"\"from pretix.base.models import (\n    Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,\n)\nfrom pretix.base.services.export import (\n    run_scheduled_exports, scheduled_event_export, scheduled_organizer_export,\n)\n\"\"\",1)\nopen(p,'w').write(s)\nEOF\ntimeout 600 python -m pytest tests/base/test_export.py -q 2>&1 | tail -25",
+    "timeout 900 python -m pytest tests/base/test_export.py tests/base/test_runperiodic.py -q -p no:cacheprovider 2>&1 | tail -30",
+    "(python -m flake8 pretix/base/services/export.py tests/base/test_export.py 2>&1 | tail -5; python -m isort -c pretix/base/services/export.py tests/base/test_export.py 2>&1 | tail -3); echo done",
+    "python -m flake8 pretix/base/services/export.py tests/base/test_export.py"
+  ],
+  "seam_table": false,
+  "output_chars": 2394,
+  "hidden": {
+    "base.test_export::test_event_run_sets_new_time": true,
+    "base.test_export::test_event_not_run_when_failed_5_times": false,
+    "base.test_export::test_event_fail_invalid_config": false,
+    "base.test_export::test_event_fail_user_inactive": false,
+    "base.test_export::test_event_fail_user_no_permission": false,
+    "base.test_export::test_organizer_run_sets_new_time": true,
+    "base.test_export::test_organizer_not_run_when_failed_5_times": false,
+    "base.test_export::test_organizer_fail_invalid_config": false,
+    "base.test_export::test_organizer_fail_user_inactive": false,
+    "base.test_export::test_organizer_fail_user_does_not_have_specific_permission": false,
+    "base.test_export::test_event_ok": true,
+    "base.test_export::test_organizer_limited_to_events": true,
+    "base.test_export::test_organizer_ok": true
+  },
+  "hidden_passed": 5,
+  "hidden_total": 13,
+  "visible_green": true,
+  "visible_passed": 3,
+  "visible_total": 3,
+  "diff_lines": 109
+}

@@ -1,0 +1,67 @@
+{
+  "run_id": "haiku/send_expiry_warnings/placebo/r3",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "send_expiry_warnings",
+  "condition": "placebo",
+  "rep": 3,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 123.4,
+  "cost_usd": 0.026778699999999996,
+  "num_turns": 26,
+  "duration_s": 120.8,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 1,
+    "Bash": 16,
+    "Read": 3,
+    "Edit": 3
+  },
+  "files_read": [
+    "src/pretix/base/services/orders.py",
+    "src/pretix/plugins/banktransfer/tasks.py"
+  ],
+  "skills_invoked": [
+    "careful-dev"
+  ],
+  "bash_commands": [
+    "git status --short && git log --oneline -3 && grep -n \"^def \\|^from \\|^import \" src/pretix/base/services/orders.py | head -120",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/send_expiry_warnings/placebo/r3/repo/src && sed -n 2700,2730p pretix/base/settings.py && echo ---- && grep -rn \"expiry_warning\\|expire_warning\\|payment_term_expire_date\\|download_reminder_sent = \\|reminder_sent\" pretix/base/models/orders.py pretix/base/models/event.py | head -30 && echo ---- && grep -rn \"periodic_task\" pretix --include=*.py | grep -v \"^pretix/base/services/orders.py\" | head -30 && echo ---- && grep -rn \"expire_warning_sent\\|expiry_warning\" pretix --include=*.py | head -30 && echo ---- && sed -n 1350,1365p pretix/control/forms/event.py",
+    "sed -n 286,300p pretix/base/models/orders.py && echo ---- && sed -n 995,1030p pretix/base/models/orders.py && echo ---- && grep -rln \"expiry_reminder_sent\" . | head && echo ---- && sed -n 1098,1140p pretix/base/services/mail.py && echo ---- && sed -n 2730,2740p pretix/base/settings.py",
+    "grep -n \"expire_date\\|'url'\\|def get_email_context\" pretix/base/email.py | head -20 && echo ---- && grep -rn \"send_download_reminders\\|mail_days_download_reminder\\|expire_orders(\" tests --include=*.py | head -20 && echo ---- && grep -n \"def send_mail\" -A12 pretix/base/models/orders.py | head -30 && echo ---- && grep -n \"expire_date\" -B2 -A3 pretix/base/services/orders.py | head -40",
+    "sed -n 241,300p pretix/base/email.py | grep -n \"expire\\|url\\|event\\|order\" | head -30 && echo ---- && grep -rn \"mail_text_order_expire_warning\\|expire_date\" pretix/base/email.py pretix/base/services/mail.py pretix/base/models/orders.py | head && echo ---- && sed -n 940,1010p tests/base/test_orders.py && echo ---- && grep -n \"^class \\|^from\\|^import\" tests/base/test_orders.py | head -60",
+    "grep -rn \"'expire_date'\\|\\\"expire_date\\\"\\|expire_date=\" pretix --include=*.py | head && echo ---- && sed -n 241,262p pretix/base/email.py && echo ---- && grep -n \"class OrderExpire\\|expire_date\" -A6 pretix/base/email.py | head -30 && echo ---- && grep -rn \"expire_warning\\|expire_date\\|mail_days_order\" tests --include=*.py | grep -v \"mail_settings_preview\" | head -20",
+    "grep -n \"download_reminder_sent\\|expiry_reminder_sent\" pretix/base/services/orders.py && echo ---- && sed -n 931,940p tests/base/test_orders.py && echo ---- && sed -n 1010,1030p tests/base/test_orders.py",
+    "grep -n \"class OrderFee\" -A3 pretix/base/models/orders.py | head -5 && grep -n \"    value = \\|    tax_rate = \\|    tax_value = \\|    tax_rule = \\|    fee_type = \\|    order = \" pretix/base/models/orders.py | sed -n 1,20p && echo ---- && grep -n \"def all_logentries\" pretix/base/models/*.py pretix/base/models/*/*.py 2>/dev/null | head -3; grep -n \"OrderFee.objects.create\" tests/base/test_orders.py | head -2",
+    "grep -rn \"fee_type=OrderFee.FEE_TYPE_CANCELLATION\" -B3 -A3 tests --include=*.py | head -20; grep -n \"^class DownloadReminderTests\" -B3 tests/base/test_orders.py | head -3",
+    "timeout 580 python -m pytest tests/base/test_orders.py -k \"ExpiryWarningTests or DownloadReminderTests or expire_orders or test_expire\" -q -p no:cacheprovider 2>&1 | tail -40",
+    "timeout 300 python -m pytest tests/base/test_orders.py -k ExpiryWarningTests -v -p no:cacheprovider 2>&1 | grep -E \"PASS|FAIL|ERROR\" | head -20; (python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | head -10; echo \"flake8 exit: $?\"); (python -m isort --check-only --diff pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | head -10; echo \"isort done\")",
+    "timeout 300 python -m pytest tests/base/test_orders.py -k ExpiryWarningTests -v -p no:cacheprovider 2>&1 | grep -E \"PASSED|FAILED|ERROR\" | head -20",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; echo \"flake8 exit: $?\"; python -m isort --check-only pretix/base/services/orders.py tests/base/test_orders.py; echo \"isort exit: $?\"",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/send_expiry_warnings/placebo/r3/repo && git diff --stat && git diff src/pretix/base/services/orders.py | head -80",
+    "git -C /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-pretix-probe/haiku/send_expiry_warnings/placebo/r3/repo diff --stat"
+  ],
+  "seam_table": false,
+  "output_chars": 5398,
+  "hidden": {
+    "base.test_orders.PaymentReminderTests::test_disabled": true,
+    "base.test_orders.PaymentReminderTests::test_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_confirmed_but_not_all_paid": false,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_failed_state": false,
+    "base.test_orders.PaymentReminderTests::test_sent_days": false,
+    "base.test_orders.PaymentReminderTests::test_sent_no_expiry": false,
+    "base.test_orders.PaymentReminderTests::test_sent_not_immediately_after_purchase": true,
+    "base.test_orders.PaymentReminderTests::test_sent_once": false
+  },
+  "hidden_passed": 4,
+  "hidden_total": 9,
+  "visible_green": true,
+  "visible_passed": 432,
+  "visible_total": 432,
+  "diff_lines": 150
+}

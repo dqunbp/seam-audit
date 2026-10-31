@@ -1,0 +1,202 @@
+diff --git a/src/pretix/base/services/orders.py b/src/pretix/base/services/orders.py
+index dc949fe..c867080 100644
+--- a/src/pretix/base/services/orders.py
++++ b/src/pretix/base/services/orders.py
+@@ -1492,6 +1492,47 @@ def send_expiry_warnings(sender, **kwargs):
+                     )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def expire_orders(sender, **kwargs):
++    """
++    Marks pending orders as expired once their payment deadline has passed, for events that have
++    automatic expiry enabled. The deadline is ``Order.payment_term_expire_date``, which takes the
++    expiry delay and the last date of payments into account.
++    """
++    settings = None
++    event_id = None
++
++    # ``payment_term_expire_date`` is never earlier than ``expires``, so this is a safe pre-filter
++    for o in Order.objects.filter(
++            status=Order.STATUS_PENDING, expires__lt=now(),
++    ).only('pk', 'event', 'expires').select_related('event').order_by('event_id'):
++        if event_id != o.event_id:
++            settings = o.event.settings
++            event_id = o.event_id
++
++        if not settings.payment_term_expire_automatically:
++            continue
++
++        try:
++            with transaction.atomic():
++                # Re-check under lock, the order may have been paid or changed since the query above
++                order = Order.objects.select_related('event').select_for_update(of=OF_SELF).get(pk=o.pk)
++                if order.status != Order.STATUS_PENDING:
++                    continue
++                if order.require_approval or order.valid_if_pending:
++                    continue
++                if order.fees.filter(fee_type=OrderFee.FEE_TYPE_CANCELLATION).exists():
++                    continue
++                if order.payment_term_expire_date >= now():
++                    continue
++
++                mark_order_expired(order)
++        except Exception:
++            # The order stays pending and is picked up again by the next run
++            logger.exception('Could not expire order %s', o.pk)
++
++
+ @receiver(signal=periodic_task)
+ @scopes_disabled()
+ def send_download_reminders(sender, **kwargs):
+diff --git a/src/tests/base/test_orders.py b/src/tests/base/test_orders.py
+index 018e28e..df8e014 100644
+--- a/src/tests/base/test_orders.py
++++ b/src/tests/base/test_orders.py
+@@ -23,6 +23,7 @@ import json
+ import zoneinfo
+ from datetime import date, datetime, timedelta
+ from decimal import Decimal
++from unittest import mock
+ from zoneinfo import ZoneInfo
+ 
+ import pytest
+@@ -55,8 +56,8 @@ from pretix.base.services.invoices import (
+ )
+ from pretix.base.services.orders import (
+     OrderChangeManager, OrderError, _create_order, approve_order, cancel_order,
+-    deny_order, reactivate_order, send_download_reminders,
+-    send_expiry_warnings,
++    deny_order, expire_orders, mark_order_expired, reactivate_order,
++    send_download_reminders, send_expiry_warnings,
+ )
+ from pretix.plugins.banktransfer.payment import BankTransfer
+ from pretix.testutils.mock import mocker_context
+@@ -4449,3 +4450,126 @@ def test_autocreate_medium(event):
+     op = order.positions.first()
+     m = op.linked_media.get()
+     assert m.type == "barcode"
++
++
++class OrderExpiryTests(TestCase):
++    def setUp(self):
++        super().setUp()
++        self.o = Organizer.objects.create(name='Dummy', slug='dummy')
++        with scope(organizer=self.o):
++            self.event = Event.objects.create(
++                organizer=self.o, name='Dummy', slug='dummy',
++                date_from=now() + timedelta(days=2),
++                plugins='pretix.plugins.banktransfer'
++            )
++            self.event.settings.payment_term_weekdays = False
++
++    def _order(self, code, expires=None, status=Order.STATUS_PENDING, event=None, **kwargs):
++        return Order.objects.create(
++            code=code, event=event or self.event, email='dummy@dummy.test',
++            status=status, locale='en',
++            datetime=now() - timedelta(days=10),
++            expires=expires if expires is not None else now() - timedelta(hours=1),
++            total=Decimal('46.00'),
++            sales_channel=self.event.organizer.sales_channels.get(identifier="web"),
++            **kwargs
++        )
++
++    @classscope(attr='o')
++    def test_expires_overdue_pending_order(self):
++        order = self._order('A1')
++        expire_orders(sender=self.event)
++        order.refresh_from_db()
++        assert order.status == Order.STATUS_EXPIRED
++        assert order.all_logentries().filter(action_type='pretix.event.order.expired').exists()
++
++    @classscope(attr='o')
++    def test_keeps_order_with_future_deadline(self):
++        order = self._order('A1', expires=now() + timedelta(days=1))
++        expire_orders(sender=self.event)
++        order.refresh_from_db()
++        assert order.status == Order.STATUS_PENDING
++
++    @classscope(attr='o')
++    def test_keeps_non_pending_orders(self):
++        paid = self._order('A1', status=Order.STATUS_PAID)
++        canceled = self._order('A2', status=Order.STATUS_CANCELED)
++        expire_orders(sender=self.event)
++        paid.refresh_from_db()
++        canceled.refresh_from_db()
++        assert paid.status == Order.STATUS_PAID
++        assert canceled.status == Order.STATUS_CANCELED
++
++    @classscope(attr='o')
++    def test_respects_disabled_automatic_expiry(self):
++        self.event.settings.payment_term_expire_automatically = False
++        order = self._order('A1')
++        expire_orders(sender=self.event)
++        order.refresh_from_db()
++        assert order.status == Order.STATUS_PENDING
++
++    @classscope(attr='o')
++    def test_respects_per_event_setting(self):
++        self.event.settings.payment_term_expire_automatically = False
++        other = Event.objects.create(
++            organizer=self.o, name='Other', slug='other',
++            date_from=now() + timedelta(days=2),
++            plugins='pretix.plugins.banktransfer'
++        )
++        other.settings.payment_term_weekdays = False
++        disabled_order = self._order('A1')
++        enabled_order = self._order('B1', event=other)
++        expire_orders(sender=self.event)
++        disabled_order.refresh_from_db()
++        enabled_order.refresh_from_db()
++        assert disabled_order.status == Order.STATUS_PENDING
++        assert enabled_order.status == Order.STATUS_EXPIRED
++
++    @classscope(attr='o')
++    def test_respects_expiry_delay(self):
++        self.event.settings.payment_term_expire_delay_days = 3
++        recent = self._order('A1', expires=now() - timedelta(hours=1))
++        old = self._order('A2', expires=now() - timedelta(days=4))
++        expire_orders(sender=self.event)
++        recent.refresh_from_db()
++        old.refresh_from_db()
++        assert recent.status == Order.STATUS_PENDING
++        assert old.status == Order.STATUS_EXPIRED
++
++    @classscope(attr='o')
++    def test_expires_when_last_payment_date_has_passed(self):
++        self.event.settings.payment_term_expire_delay_days = 10
++        self.event.settings.set('payment_term_last', now() - timedelta(days=1))
++        order = self._order('A1')
++        expire_orders(sender=self.event)
++        order.refresh_from_db()
++        assert order.status == Order.STATUS_EXPIRED
++
++    @classscope(attr='o')
++    def test_skips_orders_that_must_not_expire(self):
++        approval = self._order('A1', require_approval=True)
++        valid = self._order('A2', valid_if_pending=True)
++        with_fee = self._order('A3')
++        OrderFee.objects.create(order=with_fee, fee_type=OrderFee.FEE_TYPE_CANCELLATION, value=Decimal('1.00'))
++        expire_orders(sender=self.event)
++        for order in (approval, valid, with_fee):
++            order.refresh_from_db()
++            assert order.status == Order.STATUS_PENDING
++
++    @classscope(attr='o')
++    def test_failure_on_one_order_does_not_stop_others(self):
++        failing = self._order('A1')
++        other = self._order('A2')
++        real_mark_order_expired = mark_order_expired
++
++        def flaky(order, *args, **kwargs):
++            if order.pk == failing.pk:
++                raise Exception('boom')
++            return real_mark_order_expired(order, *args, **kwargs)
++
++        with mock.patch('pretix.base.services.orders.mark_order_expired', side_effect=flaky):
++            expire_orders(sender=self.event)
++        failing.refresh_from_db()
++        other.refresh_from_db()
++        assert failing.status == Order.STATUS_PENDING
++        assert other.status == Order.STATUS_EXPIRED

@@ -1,0 +1,178 @@
+diff --git a/src/pretix/base/services/export.py b/src/pretix/base/services/export.py
+index 493bf71..ee1d97d 100644
+--- a/src/pretix/base/services/export.py
++++ b/src/pretix/base/services/export.py
+@@ -494,3 +494,41 @@ def scheduled_event_export(self, event: Event, schedule: int) -> None:
+     )
+ 
+ 
++@receiver(signal=periodic_task)
++@scopes_disabled()
++def run_scheduled_exports(sender, **kwargs):
++    """
++    Queue all scheduled exports, both event-level and organizer-level, that are due. The export itself is
++    generated and sent by ``scheduled_event_export`` or ``scheduled_organizer_export``. We advance the next run
++    before queueing the task, so that the same occurrence is not queued twice by overlapping runs.
++    """
++    with transaction.atomic():
++        for schedule in ScheduledEventExport.objects.filter(
++            schedule_next_run__lte=now(),
++        ).select_related('event').select_for_update(
++            of=OF_SELF, skip_locked=connection.features.has_select_for_update_skip_locked
++        ):
++            schedule.compute_next_run()
++            schedule.save(update_fields=['schedule_next_run'])
++            scheduled_event_export.apply_async(
++                kwargs={
++                    'event': schedule.event_id,
++                    'schedule': schedule.pk,
++                },
++            )
++
++        for schedule in ScheduledOrganizerExport.objects.filter(
++            schedule_next_run__lte=now(),
++        ).select_for_update(
++            of=OF_SELF, skip_locked=connection.features.has_select_for_update_skip_locked
++        ):
++            schedule.compute_next_run()
++            schedule.save(update_fields=['schedule_next_run'])
++            scheduled_organizer_export.apply_async(
++                kwargs={
++                    'organizer': schedule.organizer_id,
++                    'schedule': schedule.pk,
++                },
++            )
++
++
+diff --git a/src/tests/base/test_export.py b/src/tests/base/test_export.py
+index 8ed4054..824e6a4 100644
+--- a/src/tests/base/test_export.py
++++ b/src/tests/base/test_export.py
+@@ -30,6 +30,7 @@ from freezegun import freeze_time
+ from pretix.base.models import (
+     Event, Organizer, ScheduledEventExport, ScheduledOrganizerExport, User,
+ )
++from pretix.base.services.export import run_scheduled_exports
+ 
+ 
+ @pytest.fixture(scope='function')
+@@ -57,3 +58,119 @@ def user(team):
+     return user
+ 
+ 
++FROZEN_NOW = "2023-01-20 12:00:00"
++
++
++def _create_event_schedule(event, user, next_run, rrule="DTSTART:20230119T000000\nRRULE:FREQ=DAILY"):
++    return ScheduledEventExport.objects.create(
++        event=event,
++        owner=user,
++        export_identifier="itemdata",
++        export_form_data={"_format": "default"},
++        locale="en",
++        mail_subject="Scheduled items",
++        mail_template="Your export is attached.",
++        schedule_rrule=rrule,
++        schedule_rrule_time=time(3, 30),
++        schedule_next_run=next_run,
++    )
++
++
++def _create_organizer_schedule(organizer, user, next_run, rrule="DTSTART:20230119T000000\nRRULE:FREQ=DAILY"):
++    return ScheduledOrganizerExport.objects.create(
++        organizer=organizer,
++        owner=user,
++        export_identifier="eventdata",
++        export_form_data={},
++        locale="en",
++        mail_subject="Scheduled events",
++        mail_template="Your export is attached.",
++        schedule_rrule=rrule,
++        schedule_rrule_time=time(3, 30),
++        schedule_next_run=next_run,
++    )
++
++
++@pytest.mark.django_db
++def test_scheduled_event_export_due_is_generated_and_sent(event, user):
++    with freeze_time(FROZEN_NOW):
++        s = _create_event_schedule(event, user, next_run=now() - timedelta(hours=1))
++
++        run_scheduled_exports(sender=None)
++
++        assert len(djmail.outbox) == 1
++        assert djmail.outbox[0].to == [user.email]
++        s.refresh_from_db()
++        assert s.schedule_next_run > now()
++
++
++@pytest.mark.django_db
++def test_scheduled_organizer_export_due_is_generated_and_sent(event, user):
++    with freeze_time(FROZEN_NOW):
++        s = _create_organizer_schedule(event.organizer, user, next_run=now() - timedelta(hours=1))
++
++        run_scheduled_exports(sender=None)
++
++        assert len(djmail.outbox) == 1
++        assert djmail.outbox[0].to == [user.email]
++        s.refresh_from_db()
++        assert s.schedule_next_run > now()
++
++
++@pytest.mark.django_db
++def test_scheduled_exports_not_yet_due_are_skipped(event, user):
++    with freeze_time(FROZEN_NOW):
++        next_run = now() + timedelta(hours=1)
++        es = _create_event_schedule(event, user, next_run=next_run)
++        os_ = _create_organizer_schedule(event.organizer, user, next_run=next_run)
++
++        run_scheduled_exports(sender=None)
++
++        assert len(djmail.outbox) == 0
++        es.refresh_from_db()
++        os_.refresh_from_db()
++        assert es.schedule_next_run == next_run
++        assert os_.schedule_next_run == next_run
++
++
++@pytest.mark.django_db
++def test_scheduled_exports_without_next_run_are_skipped(event, user):
++    with freeze_time(FROZEN_NOW):
++        es = _create_event_schedule(event, user, next_run=None)
++        os_ = _create_organizer_schedule(event.organizer, user, next_run=None)
++
++        run_scheduled_exports(sender=None)
++
++        assert len(djmail.outbox) == 0
++        es.refresh_from_db()
++        os_.refresh_from_db()
++        assert es.schedule_next_run is None
++        assert os_.schedule_next_run is None
++
++
++@pytest.mark.django_db
++def test_last_occurrence_is_sent_and_clears_next_run(event, user):
++    with freeze_time(FROZEN_NOW):
++        s = _create_event_schedule(
++            event, user, next_run=now() - timedelta(hours=1),
++            rrule="DTSTART:20230119T000000\nRRULE:FREQ=DAILY;COUNT=1",
++        )
++
++        run_scheduled_exports(sender=None)
++
++        assert len(djmail.outbox) == 1
++        s.refresh_from_db()
++        assert s.schedule_next_run is None
++
++
++@pytest.mark.django_db
++def test_run_twice_does_not_send_same_occurrence_twice(event, user):
++    with freeze_time(FROZEN_NOW):
++        _create_event_schedule(event, user, next_run=now() - timedelta(hours=1))
++
++        run_scheduled_exports(sender=None)
++        run_scheduled_exports(sender=None)
++
++        assert len(djmail.outbox) == 1
++
++

@@ -1,0 +1,62 @@
+{
+  "run_id": "haiku/send_expiry_warnings/skill_v2/r9",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "send_expiry_warnings",
+  "condition": "skill_v2",
+  "rep": 9,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 103.7,
+  "cost_usd": 0.02106902,
+  "num_turns": 28,
+  "duration_s": 101.5,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Skill": 1,
+    "Grep": 5,
+    "Read": 9,
+    "Bash": 8,
+    "Edit": 3
+  },
+  "files_read": [
+    "src/pretix/base/models/orders.py",
+    "src/pretix/base/services/mail.py",
+    "src/pretix/base/services/orders.py",
+    "src/pretix/base/settings.py",
+    "src/pretix/plugins/banktransfer/tasks.py"
+  ],
+  "skills_invoked": [
+    "seam-audit"
+  ],
+  "bash_commands": [
+    "git log --oneline -3 && git status --short | head && grep -rn \"expiry_reminder_sent\\|pending_warning\\|order_expire_warning\" src/pretix --include=*.py --include=*.html | grep -v migrations | head -30",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-v2dev/haiku/send_expiry_warnings/skill_v2/r9/repo/src && grep -n \"def send_mail\" -A12 pretix/base/models/orders.py | head -30; grep -rln \"send_download_reminders\\|expire_orders\" tests | head; grep -n \"expire_warning_sent\" -B2 -A3 pretix/control/logdisplay.py; grep -n \"def test_.*expir\" tests/base/test_orders.py | head -20",
+    "grep -n \"send_download_reminders\" -B3 -A30 tests/base/test_orders.py | head -80; sed -n 313,353p tests/base/test_orders.py",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k \"expiry_warning\" -q -p no:cacheprovider 2>&1 | tail -40",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k \"expir or download\" -q -p no:cacheprovider 2>&1 | tail -5; python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -5; python -m isort -c pretix/base/services/orders.py tests/base/test_orders.py 2>&1 | tail -3",
+    "timeout 900 python -m pytest tests/base/test_orders.py -k \"expir or download\" -q -p no:cacheprovider",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py; python -m isort -c pretix/base/services/orders.py tests/base/test_orders.py",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py"
+  ],
+  "seam_table": false,
+  "output_chars": 2803,
+  "hidden": {
+    "base.test_orders.PaymentReminderTests::test_disabled": true,
+    "base.test_orders.PaymentReminderTests::test_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail": false,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_confirmed_but_not_all_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_failed_state": true,
+    "base.test_orders.PaymentReminderTests::test_sent_days": false,
+    "base.test_orders.PaymentReminderTests::test_sent_no_expiry": false,
+    "base.test_orders.PaymentReminderTests::test_sent_not_immediately_after_purchase": false,
+    "base.test_orders.PaymentReminderTests::test_sent_once": true
+  },
+  "hidden_passed": 5,
+  "hidden_total": 9,
+  "visible_green": true,
+  "visible_passed": 426,
+  "visible_total": 426,
+  "diff_lines": 118
+}

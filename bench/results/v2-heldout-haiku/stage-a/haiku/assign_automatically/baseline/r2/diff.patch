@@ -1,0 +1,137 @@
+diff --git a/src/pretix/base/services/waitinglist.py b/src/pretix/base/services/waitinglist.py
+index 0104c3f..81aa7d9 100644
+--- a/src/pretix/base/services/waitinglist.py
++++ b/src/pretix/base/services/waitinglist.py
+@@ -61,3 +61,35 @@ def process_waitinglist(sender, **kwargs):
+     for e in qs:
+         if e.settings.waiting_list_auto and (e.presale_is_running or e.has_subevents):
+             assign_automatically.apply_async(args=(e.pk,))
++
++
++@app.task(base=EventTask)
++def assign_automatically(event: Event, user_id: int=None, subevent_id: int=None) -> int:
++    """
++    Creates vouchers for the entries on the waiting list of ``event`` and sends them out by email, in the
++    waiting list's priority order, as long as there is availability for the requested product. If ``subevent_id``
++    is given, only entries for that date are considered. Returns the number of vouchers created.
++    """
++    user = User.objects.get(pk=user_id) if user_id else None
++    qs = WaitingListEntry.objects.filter(
++        event=event,
++        voucher__isnull=True,
++    ).select_related('item', 'variation', 'subevent')
++    if subevent_id:
++        qs = qs.filter(subevent_id=subevent_id)
++
++    num = 0
++    for wle in qs:
++        # Once the waiting list has been disabled for this date, nobody gets vouchers any more (see quotas.py)
++        auto_disable = wle.event.settings.waiting_list_auto_disable
++        if auto_disable and auto_disable.datetime(wle.subevent or wle.event) <= now():
++            continue
++        try:
++            # We deliberately do not pass a quota cache here: every voucher we create reduces the availability
++            # for the entries after it, so cached availability would be stale.
++            wle.send_voucher(user=user)
++        except WaitingListException:
++            # Not available (any more), anonymized entry, or someone else already got a voucher in the meantime.
++            continue
++        num += 1
++    return num
+diff --git a/src/tests/base/test_waitinglist.py b/src/tests/base/test_waitinglist.py
+index aa846f7..e090aac 100644
+--- a/src/tests/base/test_waitinglist.py
++++ b/src/tests/base/test_waitinglist.py
+@@ -27,12 +27,13 @@ from django.utils.timezone import now
+ from django_scopes import scope
+ 
+ from pretix.base.models import (
+-    Event, Item, ItemVariation, Organizer, Quota, Voucher, WaitingListEntry,
++    Event, Item, ItemVariation, LogEntry, Organizer, Quota, User, Voucher,
++    WaitingListEntry,
+ )
+ from pretix.base.models.waitinglist import WaitingListException
+ from pretix.base.reldate import RelativeDate, RelativeDateWrapper
+ from pretix.base.services.waitinglist import (
+-    process_waitinglist,
++    assign_automatically, process_waitinglist,
+ )
+ from pretix.testutils.scope import classscope
+ 
+@@ -150,6 +151,76 @@ class WaitingListTestCase(TestCase):
+             self.event.presale_end = now() + timedelta(days=1)
+             self.event.save()
+ 
++    @classscope(attr='o')
++    def test_assign_automatically_limited_by_quota(self):
++        self.quota.items.add(self.item1)
++        self.quota.size = 2
++        self.quota.save()
++        for i in range(5):
++            WaitingListEntry.objects.create(
++                event=self.event, item=self.item1, email='foo{}@bar.com'.format(i)
++            )
++        assert assign_automatically(self.event.pk) == 2
++        assert Voucher.objects.count() == 2
++        assert WaitingListEntry.objects.filter(voucher__isnull=True).count() == 3
++        assert len(djmail.outbox) == 2
++
++    @classscope(attr='o')
++    def test_assign_automatically_priority_order(self):
++        self.quota.items.add(self.item1)
++        self.quota.size = 1
++        self.quota.save()
++        WaitingListEntry.objects.create(event=self.event, item=self.item1, email='first@bar.com')
++        high = WaitingListEntry.objects.create(
++            event=self.event, item=self.item1, email='high@bar.com', priority=10
++        )
++        assert assign_automatically(self.event.pk) == 1
++        high.refresh_from_db()
++        assert high.voucher
++        assert WaitingListEntry.objects.get(email='first@bar.com').voucher is None
++
++    @classscope(attr='o')
++    def test_assign_automatically_skips_unavailable_and_anonymized(self):
++        self.quota.items.add(self.item1)
++        self.quota.size = 10
++        self.quota.save()
++        empty = Quota.objects.create(event=self.event, name="Empty", size=0)
++        empty.items.add(self.item3)
++        WaitingListEntry.objects.create(event=self.event, item=self.item1, email='anonymized')
++        WaitingListEntry.objects.create(event=self.event, item=self.item1, email='foo@bar.com')
++        WaitingListEntry.objects.create(event=self.event, item=self.item3, email='bar@bar.com')
++        assert assign_automatically(self.event.pk) == 1
++        assert Voucher.objects.count() == 1
++        assert WaitingListEntry.objects.get(email='bar@bar.com').voucher is None
++        assert WaitingListEntry.objects.get(email='anonymized').voucher is None
++
++    @classscope(attr='o')
++    def test_assign_automatically_subevent(self):
++        self.event.has_subevents = True
++        self.event.save()
++        se1 = self.event.subevents.create(name='Date 1', date_from=now())
++        se2 = self.event.subevents.create(name='Date 2', date_from=now())
++        for se in (se1, se2):
++            q = Quota.objects.create(event=self.event, subevent=se, size=10, name='Quota')
++            q.items.add(self.item1)
++            WaitingListEntry.objects.create(event=self.event, subevent=se, item=self.item1, email='a@bar.com')
++            WaitingListEntry.objects.create(event=self.event, subevent=se, item=self.item1, email='b@bar.com')
++        assert assign_automatically(self.event.pk, subevent_id=se1.pk) == 2
++        assert Voucher.objects.filter(subevent=se1).count() == 2
++        assert Voucher.objects.filter(subevent=se2).count() == 0
++        assert assign_automatically(self.event.pk) == 2
++        assert Voucher.objects.filter(subevent=se2).count() == 2
++
++    @classscope(attr='o')
++    def test_assign_automatically_logs_user(self):
++        user = User.objects.create_user('admin@example.org', 'password')
++        self.quota.items.add(self.item1)
++        self.quota.size = 10
++        self.quota.save()
++        WaitingListEntry.objects.create(event=self.event, item=self.item1, email='foo@bar.com')
++        assert assign_automatically(self.event.pk, user_id=user.pk) == 1
++        assert LogEntry.objects.filter(action_type='pretix.voucher.added', user=user).count() == 1
++
+     def test_send_periodic_auto_disable(self):
+         self.event.settings.set('waiting_list_enabled', True)
+         self.event.settings.set('waiting_list_auto', True)

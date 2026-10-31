@@ -1,0 +1,58 @@
+{
+  "run_id": "haiku/send_expiry_warnings/baseline/r10",
+  "suite": "pretix",
+  "model": "haiku",
+  "task": "send_expiry_warnings",
+  "condition": "baseline",
+  "rep": 10,
+  "effort": null,
+  "exit_code": 0,
+  "wall_s": 116.0,
+  "cost_usd": 0.02697492,
+  "num_turns": 29,
+  "duration_s": 113.6,
+  "result_subtype": "success",
+  "is_error": false,
+  "tools": {
+    "Bash": 6,
+    "Grep": 7,
+    "Read": 11,
+    "Edit": 4
+  },
+  "files_read": [
+    "src/pretix/base/models/orders.py",
+    "src/pretix/base/services/mail.py",
+    "src/pretix/base/services/orders.py",
+    "src/pretix/base/settings.py",
+    "src/pretix/plugins/banktransfer/tasks.py",
+    "src/tests/base/test_orders.py"
+  ],
+  "skills_invoked": [],
+  "bash_commands": [
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/baseline/r10/repo 2>/dev/null || cd /tmp/claude-0/-tmp-claude-0--home-user-seam-audit-4d868dbd-76d3-5c3d-a30c-fa647d6d00e0-scratchpad-runs-confirm-haiku-send-expiry-warnings-baseline-r10-repo/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad; pwd; git status --short | head; grep -rn \"periodic\" src/pretix/base/services/*.py src/pretix/base/*.py src/pretix/celery_app.py 2>/dev/null | head -40; grep -rn \"expiry_warning\\|send_expiry\" src/pretix --include=*.py | head -30",
+    "pwd; ls",
+    "git status --short | head && git log --oneline -3",
+    "cd /tmp/claude-0/-home-user-seam-audit/4d868dbd-76d3-5c3d-a30c-fa647d6d00e0/scratchpad/runs-confirm/haiku/send_expiry_warnings/baseline/r10/repo/src && timeout 590 python -m pytest tests/base/test_orders.py -k \"expiry or expire or download_reminder or DownloadReminder\" -q -p no:cacheprovider 2>&1 | tail -30",
+    "(python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py 2>&1 || true) | tail -20; (python -m isort --check-only --diff pretix/base/services/orders.py tests/base/test_orders.py 2>&1 || true) | tail -5; echo done",
+    "python -m flake8 pretix/base/services/orders.py tests/base/test_orders.py"
+  ],
+  "seam_table": false,
+  "output_chars": 4105,
+  "hidden": {
+    "base.test_orders.PaymentReminderTests::test_disabled": true,
+    "base.test_orders.PaymentReminderTests::test_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail": false,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_confirmed_but_not_all_paid": true,
+    "base.test_orders.PaymentReminderTests::test_prevent_reminder_mail_failed_state": true,
+    "base.test_orders.PaymentReminderTests::test_sent_days": true,
+    "base.test_orders.PaymentReminderTests::test_sent_no_expiry": false,
+    "base.test_orders.PaymentReminderTests::test_sent_not_immediately_after_purchase": false,
+    "base.test_orders.PaymentReminderTests::test_sent_once": true
+  },
+  "hidden_passed": 6,
+  "hidden_total": 9,
+  "visible_green": true,
+  "visible_passed": 428,
+  "visible_total": 428,
+  "diff_lines": 165
+}
